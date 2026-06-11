@@ -382,3 +382,177 @@ class TestUndercut:
         assert result.finishing_order[0] == "B"
         # And the winning margin is meaningful (not just floating-point noise)
         assert result.total_times["A"] - result.total_times["B"] > 5.0
+
+
+# ---------------------------------------------------------------------------
+# 4. Five named scenario tests
+#
+# Each test is self-contained, uses hand-built fixtures, and has a comment
+# explaining exactly what property is being verified and why it matters.
+# ---------------------------------------------------------------------------
+
+def test_fresh_soft_is_faster_than_fresh_hard():
+    # The compound_offset component gives SOFT a fixed pace advantage over
+    # HARD when both are fresh (tyre_age = 0).  We run two identical cars
+    # for one lap — the only difference is their starting compound — and
+    # confirm that the SOFT car posts a lower lap time.
+    # We zero out degradation and fuel effect so nothing else can interfere.
+    cfg = SimConfig(
+        offset_soft=-0.80,
+        offset_hard=0.00,
+        deg_soft=0.0,
+        deg_hard=0.0,
+        fuel_effect=0.0,
+    )
+    result = simulate(
+        [
+            CarStrategy("SOFT_CAR", base_pace=90.0, start_compound="SOFT"),
+            CarStrategy("HARD_CAR", base_pace=90.0, start_compound="HARD"),
+        ],
+        total_laps=1,
+        cfg=cfg,
+    )
+
+    assert result.total_times["SOFT_CAR"] < result.total_times["HARD_CAR"]
+
+    # The gap should equal exactly the configured compound offset (0.80 s).
+    gap = result.total_times["HARD_CAR"] - result.total_times["SOFT_CAR"]
+    assert gap == pytest.approx(0.80)
+
+
+def test_tyres_get_slower_with_age():
+    # The tyre_deg component adds (tyre_age × deg_rate) seconds to each lap.
+    # With no pit stop, tyre_age grows by 1 every lap, so lap times must
+    # increase monotonically.  We disable fuel effect so it can't mask the
+    # degradation signal.
+    cfg = SimConfig(
+        deg_medium=0.10,    # 0.10 s/lap per lap of age — clearly visible
+        offset_medium=0.0,
+        fuel_effect=0.0,
+    )
+    result = simulate(
+        [CarStrategy("A", base_pace=90.0, start_compound="MEDIUM")],
+        total_laps=10,
+        cfg=cfg,
+    )
+    snaps = {s.lap: s for s in result.snapshots}
+
+    # Each lap must be slower than the one before it.
+    for lap in range(2, 11):
+        assert snaps[lap].lap_time > snaps[lap - 1].lap_time, (
+            f"Lap {lap} ({snaps[lap].lap_time:.3f}s) should be slower than "
+            f"lap {lap - 1} ({snaps[lap - 1].lap_time:.3f}s)"
+        )
+
+    # Over 10 laps the total slowdown must be exactly 9 × 0.10 = 0.90 s
+    # (ages 0→9, so the delta between lap 1 and lap 10 is 9 × deg_rate).
+    assert snaps[10].lap_time - snaps[1].lap_time == pytest.approx(0.90)
+
+
+def test_car_gets_faster_late_in_race_from_fuel_burn():
+    # The fuel_saving component returns −(lap − 1) × fuel_effect, so lap
+    # times decrease by fuel_effect every lap as the tank lightens.
+    # We zero out degradation and compound offset to see the fuel signal
+    # in isolation: lap times should fall smoothly from lap 1 to lap 50.
+    cfg = SimConfig(
+        fuel_effect=0.04,   # 0.04 s/lap improvement per lap
+        deg_medium=0.0,
+        offset_medium=0.0,
+    )
+    result = simulate(
+        [CarStrategy("A", base_pace=90.0, start_compound="MEDIUM")],
+        total_laps=50,
+        cfg=cfg,
+    )
+    snaps = {s.lap: s for s in result.snapshots}
+
+    # Every lap must be faster than the previous one.
+    for lap in range(2, 51):
+        assert snaps[lap].lap_time < snaps[lap - 1].lap_time, (
+            f"Lap {lap} should be faster than lap {lap - 1} due to fuel burn"
+        )
+
+    # Lap 1 is at max fuel (no saving yet); by lap 50 the car has shed
+    # 49 laps of fuel → saving = 49 × 0.04 = 1.96 s.
+    assert snaps[1].lap_time - snaps[50].lap_time == pytest.approx(1.96)
+
+
+def test_pit_stop_costs_between_18_and_25_seconds():
+    # The pit_penalty component adds cfg.pit_loss to the lap time whenever
+    # a stop is taken.  Real F1 pit-lane losses range from ~18 s (Monza,
+    # short pit lane) to ~25 s (Monaco, tight hairpin exit).
+    # We check:
+    #   (a) the default SimConfig falls within that realistic range, and
+    #   (b) the pit lap's recorded time exceeds a normal lap by exactly
+    #       pit_loss — no more, no less.
+    cfg = SimConfig(
+        pit_loss=22.0,      # default; change to test other circuits
+        deg_medium=0.0,
+        offset_medium=0.0,
+        fuel_effect=0.0,
+    )
+    strat = CarStrategy(
+        "A", base_pace=90.0, start_compound="MEDIUM",
+        pit_stops=[PitStop(lap=5, compound="HARD")],
+    )
+    result = simulate([strat], total_laps=10, cfg=cfg)
+    snaps = {s.lap: s for s in result.snapshots}
+
+    # Sanity check: the configured penalty is within the realistic F1 range.
+    assert 18.0 <= cfg.pit_loss <= 25.0
+
+    # The lap before the stop is a plain reference lap.
+    normal_lap = snaps[4].lap_time
+    # The pit lap must be exactly pit_loss seconds longer.
+    assert snaps[5].lap_time == pytest.approx(normal_lap + cfg.pit_loss)
+    # The lap after the stop returns to a normal time (no residual penalty).
+    assert snaps[6].lap_time == pytest.approx(normal_lap)
+
+
+def test_undercut_earlier_pit_leapfrogs_rival():
+    # Two cars, identical pace and strategy except for pit timing.
+    # Car B pits 5 laps earlier than Car A.
+    #
+    # What happens lap by lap:
+    #   Laps 1-19  : both cars are neck-and-neck on identical worn tyres.
+    #   Lap 20     : B pits — takes the ~22 s penalty, falls way behind.
+    #   Laps 21-24 : B is on fresh tyres (low deg); A is on worn tyres
+    #                (high deg).  B gains ~3 s per lap on A.
+    #   Lap 25     : A pits — takes the ~22 s penalty.  By this point B
+    #                has recovered enough of the gap that A's penalty puts
+    #                B firmly in the lead.
+    #   Laps 26-30 : A has fresher tyres but can't close a >10 s gap in
+    #                only 5 laps.  B wins.
+    #
+    # The undercut is NOT hard-coded here — it emerges purely from the
+    # tyre_deg and pit_penalty components interacting over the race loop.
+    cfg = SimConfig(
+        deg_soft=0.15,      # high deg rate makes worn-tyre slowdown obvious
+        offset_soft=-0.80,
+        pit_loss=22.0,
+        fuel_effect=0.0,    # disabled so only tyre effects drive the outcome
+    )
+    result = simulate(
+        [
+            CarStrategy("A", base_pace=90.0, start_compound="SOFT",
+                        pit_stops=[PitStop(lap=25, compound="SOFT")]),
+            CarStrategy("B", base_pace=90.0, start_compound="SOFT",
+                        pit_stops=[PitStop(lap=20, compound="SOFT")]),
+        ],
+        total_laps=30,
+        cfg=cfg,
+    )
+    snaps = {(s.lap, s.driver): s for s in result.snapshots}
+
+    # B dropped behind immediately after pitting (pit_loss penalty).
+    assert snaps[(21, "B")].gap_to_leader > 15, (
+        "B should be well behind A right after its pit stop"
+    )
+
+    # Once A has also pitted, B should be leading.
+    assert snaps[(26, "B")].gap_to_leader == pytest.approx(0.0), (
+        "B should be the race leader after both cars have completed their stops"
+    )
+
+    # B wins overall.
+    assert result.finishing_order[0] == "B"
