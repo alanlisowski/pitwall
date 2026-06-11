@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# FastF1 cache
+fastf1_cache/
+*.ff1pkl
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / web
+node_modules/
+web/dist/
+web/.vite/
+web/build/
+.npm/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Env files
+.env
+.env.local
+.env.*.local
