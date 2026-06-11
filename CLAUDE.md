@@ -94,3 +94,4 @@ All tunable parameters live in a config dataclass. Realistic defaults:
 - Call FastF1 from the API or from tests.
 - Hard-code the undercut/overcut.
 - Add scope beyond the five model components for v1 — Monte Carlo, safety cars, auto-calibration, and optimal-strategy solver are explicit stretch goals.
+- commit into my github repository

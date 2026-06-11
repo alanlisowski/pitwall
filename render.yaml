@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: pitwall-api
+    env: python
+    rootDir: engine
+    buildCommand: pip install -e ".[dev]"
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: PITWALL_DB
+        value: /opt/render/project/src/pitwall.db
+      - key: CORS_ORIGINS
+        value: http://localhost:5173
