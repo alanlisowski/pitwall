@@ -28,6 +28,8 @@ fastf1_cache/
 *.db
 *.sqlite
 *.sqlite3
+# ...but ship the seeded demo database so the deployed API has data
+!engine/pitwall.db
 
 # Node / web
 node_modules/
@@ -47,3 +49,8 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+#Randombs
+PitWall_claudeCode_BuildPlan.md
+PitWall_F1_Strategy_Simulator_Spec.docx
+CLAUDE.md
