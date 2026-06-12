@@ -51,6 +51,6 @@ Thumbs.db
 .env.*.local
 
 #Randombs
-PitWall_claudeCode_BuildPlan.md
-PitWall_F1_Strategy_Simulator_Spec.docx
+PitWall_Race_Engineer_Mode_V1_Spec.docx
+PitWall_RaceEngineerMode_BuildPlan.md
 CLAUDE.md
