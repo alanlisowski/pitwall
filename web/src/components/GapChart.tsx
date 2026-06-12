@@ -12,12 +12,10 @@ import type { LapSnapshotSchema } from "../api/types";
 
 const PALETTE = [
   "#3b82f6",
-  "#ef4444",
   "#22c55e",
   "#f97316",
   "#a855f7",
   "#06b6d4",
-  "#eab308",
   "#ec4899",
   "#14b8a6",
   "#f43f5e",
@@ -31,15 +29,19 @@ const PALETTE = [
   "#f9a8d4",
   "#6ee7b7",
   "#fca5a5",
+  "#93c5fd",
+  "#86efac",
 ];
 
 type ChartRow = Record<string, number>;
 
 interface Props {
+  title: string;
   snapshots: LapSnapshotSchema[];
+  highlightDriver?: string;
 }
 
-export function GapChart({ snapshots }: Props) {
+export function GapChart({ title, snapshots, highlightDriver }: Props) {
   const drivers = [...new Set(snapshots.map((s) => s.driver))];
   const totalLaps = Math.max(...snapshots.map((s) => s.lap));
 
@@ -60,11 +62,11 @@ export function GapChart({ snapshots }: Props) {
   return (
     <section className="bg-zinc-900 border border-zinc-700 rounded p-4">
       <h2 className="text-xs uppercase tracking-widest text-zinc-400 mb-4">
-        Gap to Leader
+        {title}
       </h2>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 4, right: 16, bottom: 24, left: 48 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#1c1c1f" />
           <XAxis
             dataKey="lap"
             stroke="#3f3f46"
@@ -92,10 +94,11 @@ export function GapChart({ snapshots }: Props) {
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#18181b",
-              border: "1px solid #3f3f46",
+              backgroundColor: "#0c0c0f",
+              border: "1px solid #27272a",
               borderRadius: 4,
               fontSize: 11,
+              fontFamily: "monospace",
             }}
             labelStyle={{ color: "#a1a1aa", marginBottom: 4 }}
             labelFormatter={(lap) => `Lap ${lap}`}
@@ -106,19 +109,27 @@ export function GapChart({ snapshots }: Props) {
             itemSorter={(item) => Number(item.value)}
           />
           <Legend
-            wrapperStyle={{ fontSize: 10, color: "#71717a", paddingTop: 8 }}
+            wrapperStyle={{ fontSize: 10, color: "#52525b", paddingTop: 8 }}
           />
-          {drivers.map((driver, i) => (
-            <Line
-              key={driver}
-              type="monotone"
-              dataKey={driver}
-              stroke={PALETTE[i % PALETTE.length]}
-              dot={false}
-              strokeWidth={1.5}
-              isAnimationActive={false}
-            />
-          ))}
+          {drivers.map((driver, i) => {
+            const isHighlight = driver === highlightDriver;
+            return (
+              <Line
+                key={driver}
+                type="monotone"
+                dataKey={driver}
+                stroke={
+                  isHighlight
+                    ? "#ef4444"
+                    : PALETTE[i % PALETTE.length]
+                }
+                dot={false}
+                strokeWidth={isHighlight ? 2.5 : 1}
+                opacity={highlightDriver && !isHighlight ? 0.35 : 1}
+                isAnimationActive={false}
+              />
+            );
+          })}
         </LineChart>
       </ResponsiveContainer>
     </section>
