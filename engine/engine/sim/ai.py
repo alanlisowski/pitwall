@@ -34,6 +34,7 @@ class AiCarView:
     tyre_age: float         # effective laps on current set
     pace_setting: PaceSetting
     pitted_last_lap: bool
+    sc_active: bool = False  # safety car deployed on this lap
 
 
 @dataclass
@@ -72,6 +73,9 @@ class AiProfile:
     no_pit_final_laps: int = 8
     """Do not pit in the final N laps of the race."""
 
+    pits_under_sc: bool = True
+    """Opportunistically take a cheap stop when the safety car is active."""
+
     @classmethod
     def easy(cls) -> AiProfile:
         """Reacts late to the cliff, over-pushes tyres, ignores undercuts."""
@@ -82,6 +86,7 @@ class AiProfile:
             push_gap_threshold=15.0,    # almost always in PUSH mode
             conserve_lead_threshold=50.0,
             no_pit_final_laps=3,
+            pits_under_sc=False,
         )
 
     @classmethod
@@ -134,12 +139,17 @@ def ai_action(
     pit_compound: str | None = None
 
     if not too_late:
-        cliff = cfg.cliff_lap(me.compound)
-        laps_to_cliff = cliff - me.tyre_age
-
-        # 1. Tyre cliff — non-negotiable safety stop
-        if laps_to_cliff <= profile.cliff_reaction_laps:
+        # 0. Cheap stop under Safety Car — opportunistic free pitstop
+        if profile.pits_under_sc and me.sc_active:
             pit_compound = _planned_compound(lap, planned_pits)
+
+        if pit_compound is None:
+            cliff = cfg.cliff_lap(me.compound)
+            laps_to_cliff = cliff - me.tyre_age
+
+            # 1. Tyre cliff — non-negotiable safety stop
+            if laps_to_cliff <= profile.cliff_reaction_laps:
+                pit_compound = _planned_compound(lap, planned_pits)
 
         # 2. Cover an undercut — a rival behind us just pitted
         if pit_compound is None and profile.covers_undercut:

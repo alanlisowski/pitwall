@@ -12,6 +12,7 @@ PlayerAction — combined pit + pace instruction
 """
 from __future__ import annotations
 
+import dataclasses
 import random
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +21,7 @@ from typing import Optional
 from .ai import AiCarView, AiDecision, AiProfile, ai_action
 from .components import lap_time as _lap_time
 from .config import PaceSetting, SimConfig
+from .events import SafetyCarWindow, generate_safety_car_schedule, is_sc_active
 from .strategy import CarStrategy
 
 
@@ -32,6 +34,8 @@ class EventKind(Enum):
     RIVAL_PITTED = "rival_pitted"
     TYRE_CLIFF_WARNING = "tyre_cliff_warning"
     RACE_FINISH = "race_finish"
+    SAFETY_CAR_DEPLOYED = "safety_car_deployed"
+    SAFETY_CAR_CLEARED = "safety_car_cleared"
 
 
 @dataclass
@@ -63,6 +67,7 @@ class RaceState:
     cars: list[CarState]            # sorted P1 → last
     events: list[SessionEvent]      # all events since the previous advance() call
     finished: bool
+    sc_active: bool = False         # True while safety car is deployed on this lap
 
 
 @dataclass
@@ -132,8 +137,11 @@ class RaceSession:
         self._driver_order: list[str] = [c.driver for c in cars]
         self._base_paces: dict[str, float] = {c.driver: c.base_pace for c in cars}
 
-        # Seed is reserved for future stochastic elements (safety cars, etc.)
         self._rng = random.Random(seed)
+        # SC schedule is pre-generated from the seed so races are reproducible.
+        self._sc_schedule: list[SafetyCarWindow] = generate_safety_car_schedule(
+            total_laps, cfg, self._rng
+        )
 
         self._cars: dict[str, _Car] = {
             c.driver: _Car(
@@ -212,10 +220,18 @@ class RaceSession:
 
     def _step_lap(self, lap: int) -> list[SessionEvent]:
         """Advance all cars by one lap; return events generated this lap."""
+        sc_now = is_sc_active(lap, self._sc_schedule)
+
+        # Under SC, pit loss is heavily discounted — use a modified config for this lap only.
+        effective_cfg = (
+            dataclasses.replace(self._cfg, pit_loss=self._cfg.pit_loss * self._cfg.sc_pit_loss_factor)
+            if sc_now else self._cfg
+        )
+
         # Phase 1: compute AI decisions based on state BEFORE this lap.
         ai_decisions: dict[str, AiDecision] = {}
         if self._ai_profiles:
-            views = self._build_ai_views()
+            views = self._build_ai_views(lap)
             view_by = {v.driver: v for v in views}
             for driver in self._driver_order:
                 s = self._cars[driver]
@@ -262,7 +278,7 @@ class RaceSession:
                 compound=s.compound,
                 lap_number=lap,
                 is_pit_lap=is_pit,
-                cfg=self._cfg,
+                cfg=effective_cfg,
                 pace_setting=s.pace_setting,
             )
             s.total_time += lt
@@ -277,7 +293,22 @@ class RaceSession:
             else:
                 s.effective_tyre_age += self._cfg.wear_multiplier(s.pace_setting)
 
+        # Phase 4: compress field under SC (applied after all lap times are settled).
+        if sc_now:
+            self._compress_field()
+
         events: list[SessionEvent] = []
+
+        # Safety car events — both are decision points.
+        for window in self._sc_schedule:
+            if window.start_lap == lap:
+                events.append(SessionEvent(
+                    lap=lap, kind=EventKind.SAFETY_CAR_DEPLOYED, driver="SC",
+                ))
+            elif window.end_lap == lap:
+                events.append(SessionEvent(
+                    lap=lap, kind=EventKind.SAFETY_CAR_CLEARED, driver="SC",
+                ))
 
         # Rival pit events
         for driver in self._driver_order:
@@ -308,8 +339,9 @@ class RaceSession:
 
         return events
 
-    def _build_ai_views(self) -> list[AiCarView]:
+    def _build_ai_views(self, lap: int) -> list[AiCarView]:
         """Build a fog-of-war snapshot from the current (post-previous-lap) state."""
+        sc_now = is_sc_active(lap, self._sc_schedule)
         order = self._sorted_drivers()
         leader_time = self._cars[order[0]].total_time
         return [
@@ -321,9 +353,22 @@ class RaceSession:
                 tyre_age=self._cars[d].effective_tyre_age,
                 pace_setting=self._cars[d].pace_setting,
                 pitted_last_lap=self._last_pitted.get(d, False),
+                sc_active=sc_now,
             )
             for pos, d in enumerate(order, 1)
         ]
+
+    def _compress_field(self) -> None:
+        """Compress inter-car gaps each lap the safety car is deployed.
+
+        Each SC lap, following cars' gap to the leader shrinks by
+        cfg.sc_gap_compress_factor (multiplicative).  The leader is
+        unaffected; a 0-gap car stays at 0.
+        """
+        leader_time = min(c.total_time for c in self._cars.values())
+        for car in self._cars.values():
+            gap = car.total_time - leader_time
+            car.total_time -= gap * self._cfg.sc_gap_compress_factor
 
     def _sorted_drivers(self) -> list[str]:
         return sorted(
@@ -353,4 +398,5 @@ class RaceSession:
             cars=car_states,
             events=events,
             finished=self._finished,
+            sc_active=is_sc_active(lap, self._sc_schedule),
         )

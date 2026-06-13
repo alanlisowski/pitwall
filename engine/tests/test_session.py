@@ -37,7 +37,11 @@ def _make_session(
     player_compound: str = "MEDIUM",
     ai1_pit_lap: int = 10,
 ) -> RaceSession:
-    """Standard 3-car session: player on MEDIUM, two AI cars with planned stops."""
+    """Standard 3-car session: player on MEDIUM, two AI cars with planned stops.
+
+    SC is disabled (sc_prob_per_lap=0.0) to keep these tests deterministic
+    and independent of safety-car randomness.
+    """
     cars = [
         CarStrategy(_PLAYER, base_pace=90.0, start_compound=player_compound),
         CarStrategy("AI1", base_pace=90.5, start_compound="MEDIUM",
@@ -46,7 +50,7 @@ def _make_session(
                     pit_stops=[PitStop(lap=8, compound="MEDIUM")]),
     ]
     return RaceSession(cars=cars, total_laps=total_laps, player_id=_PLAYER,
-                       cfg=SimConfig(), seed=seed)
+                       cfg=SimConfig(sc_prob_per_lap=0.0), seed=seed)
 
 
 def _drive_to_finish(session: RaceSession) -> RaceState:
@@ -145,8 +149,9 @@ class TestDeterminism:
         assert [(e.lap, e.kind, e.driver) for e in events1] == \
                [(e.lap, e.kind, e.driver) for e in events2]
 
-    def test_different_seeds_produce_same_result_when_no_randomness(self):
-        # Current engine has no stochastic elements; seed doesn't change outcome.
+    def test_different_seeds_produce_same_result_when_sc_disabled(self):
+        # With sc_prob_per_lap=0.0 (enforced by _make_session) there is no
+        # stochastic element, so different seeds produce identical race times.
         t1 = {c.driver: c.total_time for c in _drive_to_finish(_make_session(seed=1)).cars}
         t2 = {c.driver: c.total_time for c in _drive_to_finish(_make_session(seed=999)).cars}
         assert t1 == t2
@@ -205,7 +210,7 @@ class TestDecisionPoints:
             CarStrategy("AI1", base_pace=91.0, start_compound="HARD"),
         ]
         session = RaceSession(cars=cars, total_laps=20, player_id=_PLAYER,
-                              cfg=SimConfig(), seed=0)
+                              cfg=SimConfig(sc_prob_per_lap=0.0), seed=0)
         while True:
             state = session.advance()
             cliff_events = [e for e in state.events if e.kind == EventKind.TYRE_CLIFF_WARNING]
@@ -224,7 +229,7 @@ class TestDecisionPoints:
             CarStrategy("AI1", base_pace=91.0, start_compound="HARD"),
         ]
         session = RaceSession(cars=cars, total_laps=20, player_id=_PLAYER,
-                              cfg=SimConfig(), seed=0)
+                              cfg=SimConfig(sc_prob_per_lap=0.0), seed=0)
         warnings = []
         while True:
             state = session.advance()
@@ -236,7 +241,7 @@ class TestDecisionPoints:
     def test_cliff_warning_resets_after_player_pits(self):
         """After player pits, a new warning can fire on the fresh set."""
         # Player: SOFT→pit on lap 5 to SOFT again→second warning on lap 5+13=18.
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cliff = cfg.cliff_lap("SOFT")  # 16
         warning_age = cliff - RaceSession._CLIFF_WARNING_LAPS  # 13
         # Second warning lap = 5 (pit lap, age reset to 0) + warning_age = 18
@@ -287,7 +292,7 @@ class TestDecide:
                         pit_stops=[PitStop(lap=8, compound="MEDIUM")]),
         ]
         session = RaceSession(cars=cars, total_laps=_TOTAL_LAPS, player_id=_PLAYER,
-                              cfg=SimConfig(), seed=42)
+                              cfg=SimConfig(sc_prob_per_lap=0.0), seed=42)
 
         state = session.advance()           # pauses at lap 8: AI2 pits
         assert state.lap == 8
@@ -320,7 +325,7 @@ class TestDecide:
 
     def test_pace_push_hard_accelerates_tyre_wear(self):
         """PUSH_HARD (wear×1.8) should give higher tyre age than NEUTRAL after N laps."""
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cars_base = [
             CarStrategy(_PLAYER, base_pace=90.0, start_compound="HARD"),
             CarStrategy("DUMMY", base_pace=91.0, start_compound="HARD"),
@@ -340,7 +345,7 @@ class TestDecide:
         assert age_push > age_neutral
 
     def test_pace_conserve_slows_tyre_wear(self):
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cars_base = [
             CarStrategy(_PLAYER, base_pace=90.0, start_compound="HARD"),
             CarStrategy("DUMMY", base_pace=91.0, start_compound="HARD"),
@@ -387,7 +392,7 @@ class TestDecide:
 def test_matches_simulate_no_pits():
     """With no player decisions and NEUTRAL pace, session must match simulate()
     exactly: same total times, same finishing order."""
-    cfg = SimConfig()
+    cfg = SimConfig(sc_prob_per_lap=0.0)   # SC disabled; simulate() has no SC model
     total_laps = 15
     cars = [
         CarStrategy("P", base_pace=90.0, start_compound="HARD"),

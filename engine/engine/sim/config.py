@@ -115,6 +115,28 @@ class SimConfig:
     pace_conserve_hard_wear: float = 0.5
 
     # ------------------------------------------------------------------ #
+    # Safety car                                                           #
+    # ------------------------------------------------------------------ #
+    sc_prob_per_lap: float = 0.015
+    """Probability (0–1) that a safety car deploys on any given lap.
+    Set to 0.0 in a SimConfig to disable safety cars entirely."""
+
+    sc_min_duration: int = 3
+    """Minimum number of laps a safety car period lasts."""
+
+    sc_max_duration: int = 5
+    """Maximum number of laps a safety car period lasts."""
+
+    sc_gap_compress_factor: float = 0.30
+    """Fraction of each following car's gap that closes per SC lap (0–1).
+    Applied multiplicatively each lap: gap_new = gap * (1 – factor)."""
+
+    sc_pit_loss_factor: float = 0.35
+    """Pit-lane loss multiplier under a safety car.
+    Effective pit loss = pit_loss × factor (slow traffic makes stops cheap).
+    At defaults, 22s × 0.35 ≈ 7.7s — roughly the real SC pit delta."""
+
+    # ------------------------------------------------------------------ #
     # Lookup helpers                                                        #
     # ------------------------------------------------------------------ #
     def deg_rate(self, compound: str) -> float:

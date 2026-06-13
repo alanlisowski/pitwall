@@ -20,6 +20,7 @@ Typical usage::
 
 from .ai import AiProfile
 from .config import SimConfig
+from .events import SafetyCarWindow
 from .runner import LapSnapshot, RaceResult, simulate
 from .session import (
     CarState,
@@ -47,4 +48,5 @@ __all__ = [
     "PitAction",
     "PlayerAction",
     "AiProfile",
+    "SafetyCarWindow",
 ]

@@ -298,8 +298,9 @@ class TestAiIntegrationWithSession:
           PACER  — slow car that pits on lap 5 (triggers first advance() pause)
           PLAYER — slightly slower than AI1, pits on lap 6 (undercut attempt)
           AI1    — the car under test; planned stop lap 20
+        SC disabled so AI pit behaviour is driven purely by strategic rules.
         """
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cars = [
             CarStrategy("PLAYER", base_pace=90.01, start_compound="MEDIUM"),
             CarStrategy("AI1", base_pace=90.0, start_compound="MEDIUM",
@@ -379,7 +380,7 @@ class TestAiIntegrationWithSession:
 
     def test_session_without_ai_profiles_unchanged(self):
         """Omitting ai_profiles leaves pre-planned pit behaviour intact."""
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cars = [
             CarStrategy("PLAYER", base_pace=90.0, start_compound="HARD"),
             CarStrategy("AI1", base_pace=90.5, start_compound="HARD",
@@ -399,7 +400,7 @@ class TestAiIntegrationWithSession:
 
     def test_ai_pace_dial_applied_in_session(self):
         """AI car's pace setting is reflected in the state after advance()."""
-        cfg = SimConfig()
+        cfg = SimConfig(sc_prob_per_lap=0.0)
         cars = [
             CarStrategy("PLAYER", base_pace=90.0, start_compound="HARD"),
             CarStrategy("AI1", base_pace=90.5, start_compound="HARD"),
