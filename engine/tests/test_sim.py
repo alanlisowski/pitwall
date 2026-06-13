@@ -26,6 +26,7 @@ from engine.sim.components import (
     pit_penalty,
     tyre_deg,
 )
+from engine.sim.config import PaceSetting
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,8 @@ class TestTyreDeg:
         assert tyre_deg(0, "SOFT", SimConfig()) == 0.0
 
     def test_linear_growth(self):
-        cfg = SimConfig(deg_soft=0.10)
+        # cliff_lap_soft=100 keeps both test points in the linear regime
+        cfg = SimConfig(deg_soft=0.10, cliff_lap_soft=100)
         assert tyre_deg(10, "SOFT", cfg) == pytest.approx(1.0)
         assert tyre_deg(20, "SOFT", cfg) == pytest.approx(2.0)
 
@@ -556,3 +558,210 @@ def test_undercut_earlier_pit_leapfrogs_rival():
 
     # B wins overall.
     assert result.finishing_order[0] == "B"
+
+
+# ---------------------------------------------------------------------------
+# 5. Tyre cliff — non-linear degradation
+# ---------------------------------------------------------------------------
+
+class TestTyreCliff:
+    """The cliff is a kink in the deg curve: rate × cliff_factor above cliff_lap.
+    Tests use a convenient cliff at lap 10 with factor 3.0 for clean arithmetic.
+    """
+
+    def _cfg(self, **overrides) -> SimConfig:
+        base = dict(deg_soft=0.10, cliff_lap_soft=10, cliff_factor_soft=3.0)
+        base.update(overrides)
+        return SimConfig(**base)
+
+    def test_below_cliff_is_linear(self):
+        cfg = self._cfg()
+        assert tyre_deg(9, "SOFT", cfg) == pytest.approx(0.10 * 9)
+
+    def test_at_cliff_boundary_is_linear(self):
+        # tyre_age == cliff_lap uses the ≤ branch → still linear
+        cfg = self._cfg()
+        assert tyre_deg(10, "SOFT", cfg) == pytest.approx(0.10 * 10)
+
+    def test_above_cliff_applies_multiplied_rate(self):
+        cfg = self._cfg()
+        # 5 laps past cliff: 0.10*10 + 0.10*3.0*5 = 1.0 + 1.5 = 2.5
+        assert tyre_deg(15, "SOFT", cfg) == pytest.approx(2.5)
+
+    def test_cliff_exceeds_linear_extrapolation(self):
+        """Past-cliff deg is worse than a naive linear extrapolation would give."""
+        cfg = self._cfg()
+        past_cliff = tyre_deg(15, "SOFT", cfg)         # 2.5 (with factor)
+        linear_extrap = cfg.deg_rate("SOFT") * 15       # 1.5 (no factor)
+        assert past_cliff > linear_extrap
+
+    def test_per_lap_rate_jumps_sharply_at_cliff(self):
+        """The extra seconds added per lap is cliff_factor× higher above the cliff."""
+        cfg = self._cfg()
+        below = tyre_deg(10, "SOFT", cfg) - tyre_deg(9, "SOFT", cfg)   # 0.10
+        above = tyre_deg(11, "SOFT", cfg) - tyre_deg(10, "SOFT", cfg)  # 0.30
+        assert above == pytest.approx(below * cfg.cliff_factor_soft)
+
+    def test_softer_compound_hits_cliff_sooner(self):
+        cfg = SimConfig()
+        assert cfg.cliff_lap("SOFT") < cfg.cliff_lap("MEDIUM") < cfg.cliff_lap("HARD")
+
+    def test_softer_compound_has_higher_cliff_factor(self):
+        cfg = SimConfig()
+        assert cfg.cliff_factor("SOFT") >= cfg.cliff_factor("MEDIUM") >= cfg.cliff_factor("HARD")
+
+    def test_fractional_tyre_age_works_across_cliff(self):
+        """tyre_age is float; 10.5 should sit above the cliff and use the steep rate."""
+        cfg = self._cfg()
+        result = tyre_deg(10.5, "SOFT", cfg)
+        expected = 0.10 * 10 + 0.10 * 3.0 * 0.5  # 1.0 + 0.15 = 1.15
+        assert result == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# 6. Pace dial — lap-time delta and tyre-wear multiplier
+# ---------------------------------------------------------------------------
+
+class TestPaceDial:
+    """Verify the five-level pace setting's two effects: lap-time delta and
+    wear multiplier.  Wear multiplier tests operate on effective tyre age
+    directly (as the runner would accumulate it).
+    """
+
+    def test_ordering_of_lap_time_deltas(self):
+        cfg = SimConfig()
+        assert (
+            cfg.pace_delta(PaceSetting.PUSH_HARD)
+            < cfg.pace_delta(PaceSetting.PUSH)
+            < cfg.pace_delta(PaceSetting.NEUTRAL)
+            < cfg.pace_delta(PaceSetting.CONSERVE)
+            < cfg.pace_delta(PaceSetting.CONSERVE_HARD)
+        )
+
+    def test_neutral_delta_is_zero(self):
+        assert SimConfig().pace_delta(PaceSetting.NEUTRAL) == pytest.approx(0.0)
+
+    def test_neutral_wear_is_one(self):
+        assert SimConfig().wear_multiplier(PaceSetting.NEUTRAL) == pytest.approx(1.0)
+
+    def test_ordering_of_wear_multipliers(self):
+        cfg = SimConfig()
+        assert (
+            cfg.wear_multiplier(PaceSetting.CONSERVE_HARD)
+            < cfg.wear_multiplier(PaceSetting.CONSERVE)
+            < cfg.wear_multiplier(PaceSetting.NEUTRAL)
+            < cfg.wear_multiplier(PaceSetting.PUSH)
+            < cfg.wear_multiplier(PaceSetting.PUSH_HARD)
+        )
+
+    def test_push_hard_lap_time_faster_than_neutral(self):
+        cfg = SimConfig(deg_soft=0.0, offset_soft=0.0, fuel_effect=0.0)
+        push = lap_time(car_pace=90.0, tyre_age=0, compound="SOFT",
+                        lap_number=1, is_pit_lap=False, cfg=cfg,
+                        pace_setting=PaceSetting.PUSH_HARD)
+        neutral = lap_time(car_pace=90.0, tyre_age=0, compound="SOFT",
+                           lap_number=1, is_pit_lap=False, cfg=cfg)
+        assert push < neutral
+        assert neutral - push == pytest.approx(abs(cfg.pace_push_hard_delta))
+
+    def test_conserve_hard_lap_time_slower_than_neutral(self):
+        cfg = SimConfig(deg_soft=0.0, offset_soft=0.0, fuel_effect=0.0)
+        conserve = lap_time(car_pace=90.0, tyre_age=0, compound="SOFT",
+                            lap_number=1, is_pit_lap=False, cfg=cfg,
+                            pace_setting=PaceSetting.CONSERVE_HARD)
+        neutral = lap_time(car_pace=90.0, tyre_age=0, compound="SOFT",
+                           lap_number=1, is_pit_lap=False, cfg=cfg)
+        assert conserve > neutral
+        assert conserve - neutral == pytest.approx(cfg.pace_conserve_hard_delta)
+
+    def test_effective_age_accumulates_faster_when_pushing(self):
+        """10 real laps at PUSH_HARD accumulates 18 effective laps of wear."""
+        cfg = SimConfig()
+        actual_laps = 10
+        eff_push = actual_laps * cfg.wear_multiplier(PaceSetting.PUSH_HARD)
+        eff_neutral = actual_laps * cfg.wear_multiplier(PaceSetting.NEUTRAL)
+        assert eff_push == pytest.approx(18.0)
+        assert eff_neutral == pytest.approx(10.0)
+        assert eff_push > eff_neutral
+
+    def test_effective_age_accumulates_slower_when_conserving(self):
+        """20 real laps at CONSERVE_HARD accumulates only 10 effective laps of wear."""
+        cfg = SimConfig()
+        actual_laps = 20
+        eff_conserve = actual_laps * cfg.wear_multiplier(PaceSetting.CONSERVE_HARD)
+        eff_neutral = actual_laps * cfg.wear_multiplier(PaceSetting.NEUTRAL)
+        assert eff_conserve == pytest.approx(10.0)
+        assert eff_neutral == pytest.approx(20.0)
+        assert eff_conserve < eff_neutral
+
+
+# ---------------------------------------------------------------------------
+# 7. Cliff × pace-dial interaction — the "Race Engineer" scenarios
+# ---------------------------------------------------------------------------
+
+class TestCliffAndPaceDialInteraction:
+    """End-to-end properties that span both features:
+    pushing is faster now but brings the cliff forward;
+    conserving is slower now but extends tyre life past the cliff.
+    """
+
+    def test_pushing_brings_cliff_forward(self):
+        """10 laps of PUSH_HARD crosses the cliff; 10 neutral laps do not.
+
+        SOFT cliff at 16. PUSH_HARD wear=1.8 → 10×1.8=18 > 16 (past cliff).
+        Neutral: 10×1.0=10 < 16 (still linear).  Consequently the pusher's
+        deg penalty is substantially higher despite fewer real laps driven.
+        """
+        cfg = SimConfig(deg_soft=0.10, cliff_lap_soft=16, cliff_factor_soft=2.5)
+        actual_laps = 10
+        eff_push = actual_laps * cfg.wear_multiplier(PaceSetting.PUSH_HARD)    # 18
+        eff_neutral = actual_laps * cfg.wear_multiplier(PaceSetting.NEUTRAL)   # 10
+
+        assert eff_push > cfg.cliff_lap("SOFT"), "pusher must be past the cliff"
+        assert eff_neutral < cfg.cliff_lap("SOFT"), "neutral must still be linear"
+        assert tyre_deg(eff_push, "SOFT", cfg) > tyre_deg(eff_neutral, "SOFT", cfg)
+
+    def test_conserving_delays_cliff(self):
+        """20 real laps at CONSERVE_HARD stays below the cliff; neutral exceeds it.
+
+        SOFT cliff at 16. CONSERVE_HARD wear=0.5 → 20×0.5=10 < 16 (linear).
+        Neutral: 20×1.0=20 > 16 (past cliff).
+        """
+        cfg = SimConfig(cliff_lap_soft=16)
+        actual_laps = 20
+        eff_conserve = actual_laps * cfg.wear_multiplier(PaceSetting.CONSERVE_HARD)  # 10
+        eff_neutral = actual_laps * cfg.wear_multiplier(PaceSetting.NEUTRAL)          # 20
+
+        assert eff_conserve < cfg.cliff_lap("SOFT"), "conserved tyre must be below cliff"
+        assert eff_neutral > cfg.cliff_lap("SOFT"), "neutral tyre must be past cliff"
+
+    def test_pushing_faster_per_lap_but_steeper_deg_when_past_cliff(self):
+        """Push lap time is lower (pace delta wins) but the deg penalty grows sharply
+        once effective age crosses the cliff, narrowing the net advantage.
+
+        At real lap 3, pusher effective age = 5.4, neutral = 3 — both below cliff.
+        At real lap 10, pusher effective age = 18 > cliff(16), neutral = 10 — still linear.
+        We verify the deg delta expands dramatically at the latter point.
+        """
+        cfg = SimConfig(
+            deg_soft=0.10,
+            cliff_lap_soft=16,
+            cliff_factor_soft=2.5,
+            offset_soft=0.0,
+            fuel_effect=0.0,
+        )
+
+        def net_advantage(actual_laps: int) -> float:
+            """Pace-delta gain minus extra deg cost vs neutral, in seconds/lap."""
+            eff_push = actual_laps * cfg.wear_multiplier(PaceSetting.PUSH_HARD)
+            eff_neutral = actual_laps * cfg.wear_multiplier(PaceSetting.NEUTRAL)
+            extra_deg = tyre_deg(eff_push, "SOFT", cfg) - tyre_deg(eff_neutral, "SOFT", cfg)
+            pace_gain = abs(cfg.pace_delta(PaceSetting.PUSH_HARD))  # 0.40 s
+            return pace_gain - extra_deg
+
+        # Early on (lap 3) pusher advantage is positive: pace gain > extra deg
+        assert net_advantage(3) > 0, "pushing should be a net benefit on fresh tyres"
+        # The advantage erodes as effective age passes the cliff
+        assert net_advantage(3) > net_advantage(10), (
+            "pushing advantage must erode as effective age crosses the cliff"
+        )

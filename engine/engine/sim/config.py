@@ -8,7 +8,23 @@ in engine/CALIBRATION.md.
 """
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
+
+
+class PaceSetting(enum.Enum):
+    """Five-level pace dial for Race Engineer live mode.
+
+    Each level applies a lap-time delta and a tyre-wear multiplier.
+    The wear multiplier scales how fast effective tyre age accumulates;
+    pushing brings the tyre cliff forward, conserving delays it.
+    """
+
+    PUSH_HARD = "PUSH_HARD"
+    PUSH = "PUSH"
+    NEUTRAL = "NEUTRAL"
+    CONSERVE = "CONSERVE"
+    CONSERVE_HARD = "CONSERVE_HARD"
 
 
 @dataclass
@@ -25,6 +41,29 @@ class SimConfig:
 
     deg_hard: float = 0.045
     """Hard compound: ~0.03–0.06 s/lap per lap of tyre age."""
+
+    # ------------------------------------------------------------------ #
+    # Tyre cliff — non-linear degradation acceleration                      #
+    # Below cliff_lap: pure linear.  Above: rate × cliff_factor per lap.   #
+    # Softer compounds hit the cliff sooner (lower lap threshold).          #
+    # ------------------------------------------------------------------ #
+    cliff_lap_soft: int = 16
+    """Soft compound: cliff at ~16 laps (hot conditions, high grip demand)."""
+
+    cliff_lap_medium: int = 28
+    """Medium compound: cliff at ~28 laps."""
+
+    cliff_lap_hard: int = 42
+    """Hard compound: cliff at ~42 laps."""
+
+    cliff_factor_soft: float = 2.5
+    """Soft post-cliff deg multiplier (rate × 2.5 above cliff_lap_soft)."""
+
+    cliff_factor_medium: float = 2.0
+    """Medium post-cliff deg multiplier."""
+
+    cliff_factor_hard: float = 1.8
+    """Hard post-cliff deg multiplier."""
 
     # ------------------------------------------------------------------ #
     # Compound pace offsets  (s/lap relative to HARD when fresh)           #
@@ -56,6 +95,26 @@ class SimConfig:
     """Lap-time improvement per lap driven (s/lap), from fuel mass loss."""
 
     # ------------------------------------------------------------------ #
+    # Pace dial — per-level lap-time deltas (s/lap, negative = faster)     #
+    # ------------------------------------------------------------------ #
+    pace_push_hard_delta: float = -0.40
+    pace_push_delta: float = -0.20
+    pace_neutral_delta: float = 0.00
+    pace_conserve_delta: float = 0.30
+    pace_conserve_hard_delta: float = 0.60
+
+    # ------------------------------------------------------------------ #
+    # Pace dial — per-level tyre-wear multipliers                          #
+    # Applied to effective_tyre_age accumulation each lap.                 #
+    # PUSH_HARD at 1.8× means 10 laps of pushing = 18 laps of wear.       #
+    # ------------------------------------------------------------------ #
+    pace_push_hard_wear: float = 1.8
+    pace_push_wear: float = 1.3
+    pace_neutral_wear: float = 1.0
+    pace_conserve_wear: float = 0.7
+    pace_conserve_hard_wear: float = 0.5
+
+    # ------------------------------------------------------------------ #
     # Lookup helpers                                                        #
     # ------------------------------------------------------------------ #
     def deg_rate(self, compound: str) -> float:
@@ -79,3 +138,47 @@ class SimConfig:
         if c == "HARD":
             return self.offset_hard
         raise ValueError(f"Unknown compound {compound!r}. Expected SOFT, MEDIUM, or HARD.")
+
+    def cliff_lap(self, compound: str) -> int:
+        """Return the tyre-age lap at which the cliff begins for a compound."""
+        c = compound.upper()
+        if c == "SOFT":
+            return self.cliff_lap_soft
+        if c == "MEDIUM":
+            return self.cliff_lap_medium
+        if c == "HARD":
+            return self.cliff_lap_hard
+        raise ValueError(f"Unknown compound {compound!r}. Expected SOFT, MEDIUM, or HARD.")
+
+    def cliff_factor(self, compound: str) -> float:
+        """Return the post-cliff degradation multiplier for a compound."""
+        c = compound.upper()
+        if c == "SOFT":
+            return self.cliff_factor_soft
+        if c == "MEDIUM":
+            return self.cliff_factor_medium
+        if c == "HARD":
+            return self.cliff_factor_hard
+        raise ValueError(f"Unknown compound {compound!r}. Expected SOFT, MEDIUM, or HARD.")
+
+    def pace_delta(self, setting: PaceSetting) -> float:
+        """Return lap-time delta (s/lap) for a pace setting."""
+        _map = {
+            PaceSetting.PUSH_HARD:     self.pace_push_hard_delta,
+            PaceSetting.PUSH:          self.pace_push_delta,
+            PaceSetting.NEUTRAL:       self.pace_neutral_delta,
+            PaceSetting.CONSERVE:      self.pace_conserve_delta,
+            PaceSetting.CONSERVE_HARD: self.pace_conserve_hard_delta,
+        }
+        return _map[setting]
+
+    def wear_multiplier(self, setting: PaceSetting) -> float:
+        """Return effective-tyre-age accumulation rate for a pace setting."""
+        _map = {
+            PaceSetting.PUSH_HARD:     self.pace_push_hard_wear,
+            PaceSetting.PUSH:          self.pace_push_wear,
+            PaceSetting.NEUTRAL:       self.pace_neutral_wear,
+            PaceSetting.CONSERVE:      self.pace_conserve_wear,
+            PaceSetting.CONSERVE_HARD: self.pace_conserve_hard_wear,
+        }
+        return _map[setting]

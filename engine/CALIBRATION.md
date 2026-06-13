@@ -154,9 +154,11 @@ estimator. The model correctly identifies both as the fastest cars.
    affected laps were not individually identified in the data and were only
    partially removed by the 107% outlier filter.
 
-3. **Linear degradation.**  Real tyre behaviour is non-linear (thermal-cliff
-   behaviour on SOFT in hot conditions, step-change at MEDIUM life end).
-   The model uses constant deg rates throughout each stint.
+3. **Non-linear degradation (cliff) implemented.**  `tyre_deg` is now
+   piecewise-linear with per-compound `cliff_lap` and `cliff_factor` thresholds.
+   The cliff parameters were calibrated against the default config; the Hungarian
+   GP TUNED_CFG does not yet retune them, so the cliff has no effect on the
+   calibration numbers above (all SOFT stints in this race ended before lap 16).
 
 4. **No grid-position / formation-lap effect.**  The simulation starts every
    car at time = 0; gaps from qualifying are not modelled.
