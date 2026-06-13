@@ -20,6 +20,15 @@ Typical usage::
 
 from .config import SimConfig
 from .runner import LapSnapshot, RaceResult, simulate
+from .session import (
+    CarState,
+    EventKind,
+    PitAction,
+    PlayerAction,
+    RaceSession,
+    RaceState,
+    SessionEvent,
+)
 from .strategy import CarStrategy, PitStop
 
 __all__ = [
@@ -29,4 +38,11 @@ __all__ = [
     "LapSnapshot",
     "RaceResult",
     "simulate",
+    "RaceSession",
+    "RaceState",
+    "CarState",
+    "SessionEvent",
+    "EventKind",
+    "PitAction",
+    "PlayerAction",
 ]
