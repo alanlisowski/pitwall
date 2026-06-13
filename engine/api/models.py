@@ -116,3 +116,50 @@ class CompareResponse(BaseModel):
     result_a: RaceResultSchema
     result_b: RaceResultSchema
     deltas: list[DriverDelta]
+
+
+# ---------------------------------------------------------------------------
+# Race Engineer Mode (interactive session)
+# ---------------------------------------------------------------------------
+
+class CarStateSchema(BaseModel):
+    driver: str
+    position: int
+    gap_to_leader: float
+    compound: str
+    tyre_age: float
+    total_time: float
+    pace_setting: str
+    pitted_this_lap: bool
+
+
+class SessionEventSchema(BaseModel):
+    lap: int
+    kind: str
+    driver: str
+
+
+class RaceStateSchema(BaseModel):
+    lap: int
+    total_laps: int
+    cars: list[CarStateSchema]
+    events: list[SessionEventSchema]
+    finished: bool
+    sc_active: bool
+
+
+class StartRaceRequest(BaseModel):
+    race_id: int
+    driver_id: str
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    seed: int = 42
+
+
+class StartRaceResponse(BaseModel):
+    session_id: str
+    state: RaceStateSchema
+
+
+class AdvanceRequest(BaseModel):
+    pit_compound: Literal["SOFT", "MEDIUM", "HARD"] | None = None
+    pace: Literal["PUSH_HARD", "PUSH", "NEUTRAL", "CONSERVE", "CONSERVE_HARD"] = "NEUTRAL"

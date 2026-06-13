@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -24,19 +25,37 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from engine.calibration import TUNED_CFG, build_baseline_strategies, load_real_race
 from engine.db import DEFAULT_DB, connect, init_db
-from engine.sim import CarStrategy, PitStop, RaceResult, SimConfig, simulate
+from engine.sim import (
+    AiProfile,
+    CarStrategy,
+    PitAction,
+    PitStop,
+    PlayerAction,
+    RaceResult,
+    RaceSession,
+    RaceState,
+    SimConfig,
+    simulate,
+)
+from engine.sim.config import PaceSetting
 
 from .models import (
+    AdvanceRequest,
     BaselineResponse,
+    CarStateSchema,
     CarStrategySchema,
     CompareRequest,
     CompareResponse,
     DriverDelta,
     LapSnapshotSchema,
     RaceResultSchema,
+    RaceStateSchema,
     RaceSummary,
+    SessionEventSchema,
     SimConfigSchema,
     SimulateRequest,
+    StartRaceRequest,
+    StartRaceResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -81,6 +100,16 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# In-memory session store for Race Engineer Mode.
+# Sessions are lost if the process restarts (e.g. a sleeping free-tier dyno
+# will drop them on wake). Persisting seed + action list for deterministic
+# replay is a future option.
+# ---------------------------------------------------------------------------
+
+_SESSIONS: dict[str, RaceSession] = {}
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -113,6 +142,40 @@ def _schema_to_engine_strategies(schemas: list[CarStrategySchema]) -> list[CarSt
         )
         for s in schemas
     ]
+
+
+def _difficulty_to_profile(difficulty: str) -> AiProfile:
+    if difficulty == "easy":
+        return AiProfile.easy()
+    if difficulty == "hard":
+        return AiProfile.hard()
+    return AiProfile.medium()
+
+
+def _race_state_to_schema(state: RaceState) -> RaceStateSchema:
+    return RaceStateSchema(
+        lap=state.lap,
+        total_laps=state.total_laps,
+        cars=[
+            CarStateSchema(
+                driver=c.driver,
+                position=c.position,
+                gap_to_leader=c.gap_to_leader,
+                compound=c.compound,
+                tyre_age=c.tyre_age,
+                total_time=c.total_time,
+                pace_setting=c.pace_setting.value,
+                pitted_this_lap=c.pitted_this_lap,
+            )
+            for c in state.cars
+        ],
+        events=[
+            SessionEventSchema(lap=e.lap, kind=e.kind.value, driver=e.driver)
+            for e in state.events
+        ],
+        finished=state.finished,
+        sc_active=state.sc_active,
+    )
 
 
 def _engine_result_to_schema(result: RaceResult) -> RaceResultSchema:
@@ -244,3 +307,70 @@ def run_compare(body: CompareRequest) -> CompareResponse:
         result_b=_engine_result_to_schema(result_b),
         deltas=deltas,
     )
+
+
+# ---------------------------------------------------------------------------
+# Race Engineer Mode endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/race/start", response_model=StartRaceResponse)
+def start_race(body: StartRaceRequest) -> StartRaceResponse:
+    """Create a new interactive race session.
+
+    Loads real pit-stop data from the database to build rival strategies,
+    sets the chosen driver as the player, then advances to the first
+    decision point and returns the session id plus initial state.
+    """
+    row = _fetch_race(body.race_id)
+    real = load_real_race(row["year"], row["gp_name"], db_path=_DB_PATH)
+    cfg = TUNED_CFG
+    strategies = build_baseline_strategies(real, cfg)
+
+    driver_codes = {s.driver for s in strategies}
+    if body.driver_id not in driver_codes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Driver {body.driver_id!r} not found in race {body.race_id}.",
+        )
+
+    profile = _difficulty_to_profile(body.difficulty)
+    ai_profiles = {s.driver: profile for s in strategies if s.driver != body.driver_id}
+
+    session = RaceSession(
+        cars=strategies,
+        total_laps=row["total_laps"],
+        player_id=body.driver_id,
+        cfg=cfg,
+        seed=body.seed,
+        ai_profiles=ai_profiles,
+    )
+    session_id = uuid.uuid4().hex
+    _SESSIONS[session_id] = session
+
+    initial_state = session.advance()
+    return StartRaceResponse(session_id=session_id, state=_race_state_to_schema(initial_state))
+
+
+@app.post("/race/{session_id}/advance", response_model=RaceStateSchema)
+def advance_race(session_id: str, body: AdvanceRequest) -> RaceStateSchema:
+    """Apply the player's decision and advance to the next decision point.
+
+    If *pit_compound* is set the player pits on the very next lap.
+    *pace* adjusts the tyre-wear dial from the next lap onwards.
+    Calling this on an already-finished session is safe and returns the
+    terminal state unchanged.
+    """
+    session = _SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found.")
+
+    action = PlayerAction(
+        pit=PitAction(compound=body.pit_compound) if body.pit_compound else None,
+        pace=PaceSetting(body.pace),
+    )
+    try:
+        session.decide(action)
+    except RuntimeError:
+        pass  # race already finished; advance() will return the terminal state
+
+    return _race_state_to_schema(session.advance())

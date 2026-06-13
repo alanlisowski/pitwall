@@ -283,3 +283,166 @@ def test_compare_unknown_race_returns_404(client):
     body = {"race_id": 999, "strategy_a": _STRATEGY_A, "strategy_b": _STRATEGY_B}
     r = client.post("/compare", json=body)
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /race/start  +  POST /race/{session_id}/advance
+# ---------------------------------------------------------------------------
+# Test DB recap:
+#   DRV — SOFT start, pits on lap 3 → HARD  (is_pit_in_lap=1 on lap 3)
+#   DRB — MEDIUM start, no pit stops
+#
+# When player=DRB the AI (DRV) pits on lap 3, creating a RIVAL_PITTED decision
+# point, so start returns a non-finished state and we can exercise advance().
+
+def test_start_race_returns_session_id_and_initial_state(client):
+    r = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "difficulty": "easy",
+        "seed": 0,
+    })
+    assert r.status_code == 200
+    data = r.json()
+
+    assert isinstance(data["session_id"], str) and len(data["session_id"]) > 0
+
+    state = data["state"]
+    assert state["total_laps"] == 5
+    assert state["lap"] >= 1
+    assert len(state["cars"]) == 2
+    positions = sorted(c["position"] for c in state["cars"])
+    assert positions == [1, 2]
+    assert isinstance(state["finished"], bool)
+    assert isinstance(state["sc_active"], bool)
+    assert isinstance(state["events"], list)
+
+
+def test_start_race_unknown_race_returns_404(client):
+    r = client.post("/race/start", json={"race_id": 999, "driver_id": "DRB"})
+    assert r.status_code == 404
+
+
+def test_start_race_unknown_driver_returns_404(client):
+    r = client.post("/race/start", json={"race_id": _RACE_ID, "driver_id": "NOBODY"})
+    assert r.status_code == 404
+
+
+def test_advance_drives_race_to_finish(client):
+    """Start a race and keep advancing until finished; verify terminal state."""
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "seed": 42,
+    }).json()
+    session_id = start["session_id"]
+    state = start["state"]
+
+    steps = 0
+    while not state["finished"]:
+        r = client.post(f"/race/{session_id}/advance", json={})
+        assert r.status_code == 200
+        state = r.json()
+        steps += 1
+        assert steps < 20, "race should finish within 20 advance() calls"
+
+    assert state["finished"]
+    assert state["lap"] == 5
+    positions = sorted(c["position"] for c in state["cars"])
+    assert positions == [1, 2]
+    # Gap to leader for P1 is 0; everyone else is positive
+    leader = next(c for c in state["cars"] if c["position"] == 1)
+    assert leader["gap_to_leader"] == 0.0
+
+
+def test_advance_unknown_session_returns_404(client):
+    r = client.post("/race/BADSESSIONID/advance", json={})
+    assert r.status_code == 404
+
+
+def test_advance_with_pit_changes_player_compound(client):
+    """Queuing a pit via advance changes the player's compound by the final lap.
+
+    AiProfile.easy() has no_pit_final_laps=3 so the AI DRV pits within the
+    5-lap window, giving us a decision point before the race finishes.
+    """
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "difficulty": "easy",
+        "seed": 0,
+    }).json()
+    session_id = start["session_id"]
+    state = start["state"]
+
+    # Queue a pit on the first advance call; if the race somehow already finished
+    # (extremely unlikely with easy difficulty) the test is still safe.
+    r = client.post(f"/race/{session_id}/advance", json={"pit_compound": "HARD"})
+    assert r.status_code == 200
+    state = r.json()
+
+    # Drive to finish
+    while not state["finished"]:
+        state = client.post(f"/race/{session_id}/advance", json={}).json()
+
+    drb = next(c for c in state["cars"] if c["driver"] == "DRB")
+    assert drb["compound"] == "HARD"
+
+
+def test_advance_after_finish_returns_stable_terminal_state(client):
+    """Calling advance() on a finished session is safe and idempotent."""
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "seed": 1,
+    }).json()
+    session_id = start["session_id"]
+    state = start["state"]
+    while not state["finished"]:
+        state = client.post(f"/race/{session_id}/advance", json={}).json()
+
+    # Extra advance after finish — must not crash and must still be finished
+    r = client.post(f"/race/{session_id}/advance", json={})
+    assert r.status_code == 200
+    extra = r.json()
+    assert extra["finished"]
+    assert extra["lap"] == 5
+    # Times must not change
+    times_first = {c["driver"]: c["total_time"] for c in state["cars"]}
+    times_extra = {c["driver"]: c["total_time"] for c in extra["cars"]}
+    assert times_first == times_extra
+
+
+def test_advance_with_pace_setting_accepted(client):
+    """Pace settings other than NEUTRAL are accepted without error."""
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "seed": 7,
+    }).json()
+    session_id = start["session_id"]
+
+    r = client.post(f"/race/{session_id}/advance", json={"pace": "PUSH_HARD"})
+    assert r.status_code == 200
+    assert "cars" in r.json()
+
+
+def test_rival_pit_event_reported_during_session(client):
+    """DRV (AI, easy difficulty) pits during the 5-lap race; its RIVAL_PITTED
+    event must appear somewhere across all advance() calls."""
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "difficulty": "easy",  # no_pit_final_laps=3 → AI pits within 5 laps
+        "seed": 0,
+    }).json()
+    session_id = start["session_id"]
+
+    all_events = list(start["state"]["events"])
+    state = start["state"]
+    while not state["finished"]:
+        state = client.post(f"/race/{session_id}/advance", json={}).json()
+        all_events.extend(state["events"])
+
+    rival_pits = [e for e in all_events if e["kind"] == "rival_pitted" and e["driver"] == "DRV"]
+    assert len(rival_pits) >= 1, "DRV must pit at least once during the race"
