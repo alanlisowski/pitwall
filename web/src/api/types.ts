@@ -88,3 +88,59 @@ export interface CompareResponse {
   result_b: RaceResultSchema;
   deltas: DriverDelta[];
 }
+
+// ---------------------------------------------------------------------------
+// Race Engineer Mode
+// ---------------------------------------------------------------------------
+
+export type PaceSetting =
+  | "PUSH_HARD"
+  | "PUSH"
+  | "NEUTRAL"
+  | "CONSERVE"
+  | "CONSERVE_HARD";
+
+export type Difficulty = "easy" | "medium" | "hard";
+
+export interface CarStateSchema {
+  driver: string;
+  position: number;
+  gap_to_leader: number;
+  compound: Compound;
+  tyre_age: number;
+  total_time: number;
+  pace_setting: PaceSetting;
+  pitted_this_lap: boolean;
+}
+
+export interface SessionEventSchema {
+  lap: number;
+  kind: string;
+  driver: string;
+}
+
+export interface RaceStateSchema {
+  lap: number;
+  total_laps: number;
+  cars: CarStateSchema[];
+  events: SessionEventSchema[];
+  finished: boolean;
+  sc_active: boolean;
+}
+
+export interface StartRaceRequest {
+  race_id: number;
+  driver_id: string;
+  difficulty: Difficulty;
+  seed?: number;
+}
+
+export interface StartRaceResponse {
+  session_id: string;
+  state: RaceStateSchema;
+}
+
+export interface AdvanceRequest {
+  pit_compound?: Compound | null;
+  pace: PaceSetting;
+}

@@ -9,6 +9,7 @@ import type {
 import { ComparePanel } from "./components/ComparePanel";
 import { Explainer } from "./components/Explainer";
 import { GapChart } from "./components/GapChart";
+import { RaceEngineerScreen } from "./components/RaceEngineerScreen";
 import { RacePicker } from "./components/RacePicker";
 import { StintTimeline } from "./components/StintTimeline";
 
@@ -41,6 +42,8 @@ function Spinner() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [mode, setMode] = useState<"strategy" | "race">("strategy");
+
   const [races, setRaces] = useState<RaceSummary[]>([]);
   const [racesError, setRacesError] = useState<string | null>(null);
 
@@ -135,9 +138,39 @@ export default function App() {
             <RacePicker
               races={races}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              onSelect={(id) => {
+                setSelectedId(id);
+                setMode("strategy");
+              }}
             />
           </div>
+
+          {baseline && (
+            <div className="shrink-0 flex gap-1">
+              <button
+                onClick={() => setMode("strategy")}
+                className={[
+                  "px-3 py-1 rounded text-[10px] font-bold uppercase tracking-widest transition-all border",
+                  mode === "strategy"
+                    ? "bg-zinc-700 border-zinc-600 text-zinc-200"
+                    : "bg-transparent border-zinc-800 text-zinc-600 hover:border-zinc-600 hover:text-zinc-400",
+                ].join(" ")}
+              >
+                Strategy
+              </button>
+              <button
+                onClick={() => setMode("race")}
+                className={[
+                  "px-3 py-1 rounded text-[10px] font-bold uppercase tracking-widest transition-all border",
+                  mode === "race"
+                    ? "bg-red-700 border-red-600 text-white"
+                    : "bg-transparent border-zinc-800 text-zinc-600 hover:border-red-900 hover:text-red-400",
+                ].join(" ")}
+              >
+                Race
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -178,8 +211,16 @@ export default function App() {
           </div>
         )}
 
+        {/* ── Race Engineer Mode ──────────────────────────────────────────── */}
+        {baseline && mode === "race" && (
+          <RaceEngineerScreen
+            baseline={baseline}
+            onBack={() => setMode("strategy")}
+          />
+        )}
+
         {/* ── Race loaded ─────────────────────────────────────────────────── */}
-        {baseline && (
+        {baseline && mode === "strategy" && (
           <>
             {/* Race metadata + action bar */}
             <div className="flex items-center justify-between gap-4 flex-wrap">

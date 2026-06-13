@@ -1,10 +1,14 @@
 import type {
+  AdvanceRequest,
   BaselineResponse,
   CompareRequest,
   CompareResponse,
   RaceResultSchema,
+  RaceStateSchema,
   RaceSummary,
   SimulateRequest,
+  StartRaceRequest,
+  StartRaceResponse,
 } from "./types";
 
 const BASE: string =
@@ -46,4 +50,15 @@ export function simulate(body: SimulateRequest): Promise<RaceResultSchema> {
 
 export function compare(body: CompareRequest): Promise<CompareResponse> {
   return post<CompareResponse>("/compare", body);
+}
+
+export function startRace(body: StartRaceRequest): Promise<StartRaceResponse> {
+  return post<StartRaceResponse>("/race/start", body);
+}
+
+export function advanceRace(
+  sessionId: string,
+  body: AdvanceRequest,
+): Promise<RaceStateSchema> {
+  return post<RaceStateSchema>(`/race/${sessionId}/advance`, body);
 }
