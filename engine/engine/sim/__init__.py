@@ -18,6 +18,7 @@ Typical usage::
     print(result.finishing_order)
 """
 
+from .ai import AiProfile
 from .config import SimConfig
 from .runner import LapSnapshot, RaceResult, simulate
 from .session import (
@@ -45,4 +46,5 @@ __all__ = [
     "EventKind",
     "PitAction",
     "PlayerAction",
+    "AiProfile",
 ]

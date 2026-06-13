@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from .ai import AiCarView, AiDecision, AiProfile, ai_action
 from .components import lap_time as _lap_time
 from .config import PaceSetting, SimConfig
 from .strategy import CarStrategy
@@ -120,6 +121,7 @@ class RaceSession:
         player_id: str,
         cfg: SimConfig,
         seed: int,
+        ai_profiles: dict[str, AiProfile] | None = None,
     ) -> None:
         if not any(c.driver == player_id for c in cars):
             raise ValueError(f"player_id {player_id!r} not found in cars list")
@@ -146,6 +148,8 @@ class RaceSession:
             )
             for c in cars
         }
+
+        self._ai_profiles: dict[str, AiProfile] = ai_profiles or {}
 
         self._current_lap: int = 0
         self._pending_pit: str | None = None    # queued compound for player
@@ -208,16 +212,46 @@ class RaceSession:
 
     def _step_lap(self, lap: int) -> list[SessionEvent]:
         """Advance all cars by one lap; return events generated this lap."""
+        # Phase 1: compute AI decisions based on state BEFORE this lap.
+        ai_decisions: dict[str, AiDecision] = {}
+        if self._ai_profiles:
+            views = self._build_ai_views()
+            view_by = {v.driver: v for v in views}
+            for driver in self._driver_order:
+                s = self._cars[driver]
+                if not s.is_player and driver in self._ai_profiles:
+                    ai_decisions[driver] = ai_action(
+                        me=view_by[driver],
+                        field=views,
+                        lap=lap,
+                        total_laps=self._total_laps,
+                        planned_pits=s.planned_pits,
+                        cfg=self._cfg,
+                        profile=self._ai_profiles[driver],
+                    )
+
+        # Phase 2: resolve player pit.
         player_pits = self._pending_pit is not None
         player_compound = self._pending_pit
         self._pending_pit = None
 
+        # Phase 3: run each car for this lap.
         for driver in self._driver_order:
             s = self._cars[driver]
 
             if s.is_player:
                 is_pit = player_pits
                 new_compound: str | None = player_compound
+            elif driver in ai_decisions:
+                decision = ai_decisions[driver]
+                s.pace_setting = decision.pace  # applied this lap
+                is_pit = decision.pit_compound is not None
+                new_compound = decision.pit_compound
+                if is_pit:
+                    # Consume the nearest future planned stop so window doesn't re-fire.
+                    future = [l for l in s.planned_pits if l >= lap]
+                    if future:
+                        del s.planned_pits[min(future)]
             else:
                 is_pit = lap in s.planned_pits
                 new_compound = s.planned_pits.get(lap)
@@ -273,6 +307,23 @@ class RaceSession:
             events.append(SessionEvent(lap=lap, kind=EventKind.RACE_FINISH, driver=winner))
 
         return events
+
+    def _build_ai_views(self) -> list[AiCarView]:
+        """Build a fog-of-war snapshot from the current (post-previous-lap) state."""
+        order = self._sorted_drivers()
+        leader_time = self._cars[order[0]].total_time
+        return [
+            AiCarView(
+                driver=d,
+                position=pos,
+                gap_to_leader=self._cars[d].total_time - leader_time,
+                compound=self._cars[d].compound,
+                tyre_age=self._cars[d].effective_tyre_age,
+                pace_setting=self._cars[d].pace_setting,
+                pitted_last_lap=self._last_pitted.get(d, False),
+            )
+            for pos, d in enumerate(order, 1)
+        ]
 
     def _sorted_drivers(self) -> list[str]:
         return sorted(
