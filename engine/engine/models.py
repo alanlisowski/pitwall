@@ -22,6 +22,7 @@ class DriverData:
     team: str
     grid_position: int
     finishing_position: int
+    team_colour: str = ""           # official constructor hex colour
     laps: list[LapData] = field(default_factory=list)
 
 
@@ -34,3 +35,4 @@ class RaceData:
     total_laps: int
     session_type: str  # "R", "Q", "S", etc.
     drivers: list[DriverData] = field(default_factory=list)
+    track_points: list[list[float]] = field(default_factory=list)  # normalised [x, y] pairs

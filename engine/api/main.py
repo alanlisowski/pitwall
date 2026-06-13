@@ -12,6 +12,7 @@ Environment variables:
 """
 from __future__ import annotations
 
+import json as _json
 import os
 import sqlite3
 import uuid
@@ -47,6 +48,7 @@ from .models import (
     CompareRequest,
     CompareResponse,
     DriverDelta,
+    DriverSchema,
     LapSnapshotSchema,
     RaceResultSchema,
     RaceStateSchema,
@@ -56,6 +58,7 @@ from .models import (
     SimulateRequest,
     StartRaceRequest,
     StartRaceResponse,
+    TrackResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -126,6 +129,22 @@ def _fetch_race(race_id: int) -> dict:
     return dict(row)
 
 
+def _fetch_drivers(race_id: int) -> list[DriverSchema]:
+    """Return driver metadata rows for *race_id*, ordered by finishing position."""
+    conn = sqlite3.connect(str(_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT driver_code, full_name, team, team_colour, "
+            "grid_position, finishing_position "
+            "FROM drivers WHERE race_id=? ORDER BY finishing_position",
+            (race_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [DriverSchema(**dict(r)) for r in rows]
+
+
 def _schema_to_engine_cfg(schema: SimConfigSchema | None) -> SimConfig:
     if schema is None:
         return TUNED_CFG
@@ -166,6 +185,7 @@ def _race_state_to_schema(state: RaceState) -> RaceStateSchema:
                 total_time=c.total_time,
                 pace_setting=c.pace_setting.value,
                 pitted_this_lap=c.pitted_this_lap,
+                current_lap_time=c.current_lap_time,
             )
             for c in state.cars
         ],
@@ -237,6 +257,7 @@ def get_baseline(race_id: int) -> BaselineResponse:
     cfg = TUNED_CFG
     strategies = build_baseline_strategies(real, cfg)
     result = simulate(strategies, total_laps=row["total_laps"], cfg=cfg)
+    drivers = _fetch_drivers(race_id)
 
     return BaselineResponse(
         race=RaceSummary(**{k: row[k] for k in RaceSummary.model_fields}),
@@ -253,7 +274,22 @@ def get_baseline(race_id: int) -> BaselineResponse:
             for s in strategies
         ],
         result=_engine_result_to_schema(result),
+        drivers=drivers,
     )
+
+
+@app.get("/races/{race_id}/track", response_model=TrackResponse)
+def get_track(race_id: int) -> TrackResponse:
+    """Return the circuit's normalised centre-line polyline.
+
+    Points are ``[x, y]`` pairs scaled so the longest axis spans [0, 1]
+    with aspect ratio preserved.  An empty list means no telemetry was
+    captured at ingestion time.
+    """
+    row = _fetch_race(race_id)  # raises 404 if unknown
+    raw = row.get("track_points")
+    points: list[list[float]] = _json.loads(raw) if raw else []
+    return TrackResponse(race_id=race_id, points=points)
 
 
 @app.post("/simulate", response_model=RaceResultSchema)

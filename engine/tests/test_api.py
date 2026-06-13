@@ -5,6 +5,7 @@ so no network calls, no FastF1, and no side effects on the dev database.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -12,66 +13,39 @@ from fastapi.testclient import TestClient
 
 _RACE_ID = 1
 
+_TRACK_POINTS = [[0.0, 0.0], [0.5, 0.5], [1.0, 0.0]]
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-_SCHEMA_SQL = """
-CREATE TABLE races (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    year         INTEGER NOT NULL,
-    gp_name      TEXT NOT NULL,
-    gp_key       TEXT NOT NULL DEFAULT '',
-    circuit      TEXT NOT NULL,
-    total_laps   INTEGER NOT NULL,
-    session_type TEXT NOT NULL DEFAULT 'R',
-    UNIQUE(year, gp_name, session_type)
-);
-CREATE TABLE drivers (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    race_id            INTEGER NOT NULL REFERENCES races(id),
-    driver_number      TEXT NOT NULL,
-    driver_code        TEXT NOT NULL,
-    full_name          TEXT NOT NULL,
-    team               TEXT NOT NULL,
-    grid_position      INTEGER NOT NULL,
-    finishing_position INTEGER NOT NULL,
-    UNIQUE(race_id, driver_number)
-);
-CREATE TABLE laps (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    driver_id      INTEGER NOT NULL REFERENCES drivers(id),
-    lap_number     INTEGER NOT NULL,
-    lap_time_s     REAL,
-    compound       TEXT NOT NULL,
-    tyre_life      INTEGER NOT NULL,
-    stint          INTEGER NOT NULL,
-    is_pit_in_lap  INTEGER NOT NULL DEFAULT 0,
-    is_pit_out_lap INTEGER NOT NULL DEFAULT 0
-);
-"""
 
 
 @pytest.fixture()
 def test_db(tmp_path):
     """Temporary SQLite DB with one race, two drivers, and minimal lap data."""
+    from engine.db import init_db
+
     db = tmp_path / "test.db"
     conn = sqlite3.connect(str(db))
-    conn.executescript(_SCHEMA_SQL)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
 
     conn.execute(
-        "INSERT INTO races (year, gp_name, gp_key, circuit, total_laps, session_type) "
-        "VALUES (2024, 'Test GP', 'Test', 'Test Circuit', 5, 'R')"
+        "INSERT INTO races (year, gp_name, gp_key, circuit, total_laps, session_type, track_points) "
+        "VALUES (2024, 'Test GP', 'Test', 'Test Circuit', 5, 'R', ?)",
+        (json.dumps(_TRACK_POINTS),),
     )
     # driver_id = 1
     conn.execute(
         "INSERT INTO drivers (race_id, driver_number, driver_code, full_name, team, "
-        "grid_position, finishing_position) VALUES (1, '1', 'DRV', 'Driver A', 'Team A', 1, 1)"
+        "team_colour, grid_position, finishing_position) "
+        "VALUES (1, '1', 'DRV', 'Driver A', 'Team A', '#FF0000', 1, 1)"
     )
     # driver_id = 2
     conn.execute(
         "INSERT INTO drivers (race_id, driver_number, driver_code, full_name, team, "
-        "grid_position, finishing_position) VALUES (1, '2', 'DRB', 'Driver B', 'Team B', 2, 2)"
+        "team_colour, grid_position, finishing_position) "
+        "VALUES (1, '2', 'DRB', 'Driver B', 'Team B', '#0000FF', 2, 2)"
     )
 
     # DRV: SOFT laps 1-3 (pit on 3), HARD laps 4-5
@@ -155,7 +129,7 @@ def test_baseline_structure(client):
     r = client.get(f"/races/{_RACE_ID}/baseline")
     assert r.status_code == 200
     data = r.json()
-    assert set(data.keys()) >= {"race", "config", "strategies", "result"}
+    assert set(data.keys()) >= {"race", "config", "strategies", "result", "drivers"}
 
     # 5 laps × 2 drivers = 10 snapshots
     assert len(data["result"]["snapshots"]) == 10
@@ -167,6 +141,32 @@ def test_baseline_structure(client):
     assert "DRV" in by_driver
     assert len(by_driver["DRV"]["pit_stops"]) == 1
     assert by_driver["DRV"]["pit_stops"][0]["compound"] == "HARD"
+
+
+def test_baseline_drivers_include_team_colour(client):
+    data = client.get(f"/races/{_RACE_ID}/baseline").json()
+    drivers = {d["driver_code"]: d for d in data["drivers"]}
+    assert set(drivers.keys()) == {"DRV", "DRB"}
+    assert drivers["DRV"]["team_colour"] == "#FF0000"
+    assert drivers["DRB"]["team_colour"] == "#0000FF"
+    assert drivers["DRV"]["team"] == "Team A"
+
+
+# ---------------------------------------------------------------------------
+# GET /races/{id}/track
+# ---------------------------------------------------------------------------
+
+def test_track_returns_normalised_points(client):
+    r = client.get(f"/races/{_RACE_ID}/track")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["race_id"] == _RACE_ID
+    assert data["points"] == _TRACK_POINTS
+
+
+def test_track_unknown_race_returns_404(client):
+    r = client.get("/races/999/track")
+    assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +425,19 @@ def test_advance_with_pace_setting_accepted(client):
     r = client.post(f"/race/{session_id}/advance", json={"pace": "PUSH_HARD"})
     assert r.status_code == 200
     assert "cars" in r.json()
+
+
+def test_advance_cars_expose_current_lap_time(client):
+    """Each CarState must carry a positive current_lap_time after the first advance."""
+    start = client.post("/race/start", json={
+        "race_id": _RACE_ID,
+        "driver_id": "DRB",
+        "seed": 3,
+    }).json()
+    state = start["state"]
+    for car in state["cars"]:
+        assert "current_lap_time" in car
+        assert car["current_lap_time"] > 0.0
 
 
 def test_rival_pit_event_reported_during_session(client):

@@ -54,6 +54,21 @@ class RaceSummary(BaseModel):
     session_type: str
 
 
+class DriverSchema(BaseModel):
+    """Driver metadata with constructor colour — returned alongside race data."""
+    driver_code: str
+    full_name: str
+    team: str
+    team_colour: str
+    grid_position: int
+    finishing_position: int
+
+
+class TrackResponse(BaseModel):
+    race_id: int
+    points: list[list[float]]
+
+
 # ---------------------------------------------------------------------------
 # Simulation output
 # ---------------------------------------------------------------------------
@@ -85,6 +100,7 @@ class BaselineResponse(BaseModel):
     config: SimConfigSchema
     strategies: list[CarStrategySchema]
     result: RaceResultSchema
+    drivers: list[DriverSchema] = []
 
 
 class SimulateRequest(BaseModel):
@@ -131,6 +147,7 @@ class CarStateSchema(BaseModel):
     total_time: float
     pace_setting: str
     pitted_this_lap: bool
+    current_lap_time: float = 0.0
 
 
 class SessionEventSchema(BaseModel):

@@ -4,14 +4,16 @@ All tests use in-process fixtures — no FastF1 network calls, no disk I/O.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 
 import pandas as pd
 import pytest
 
-from engine.ingest import _build_race_data, _parse_driver_laps
+from engine.ingest import _build_race_data, _extract_track_points, _parse_driver_laps
 from engine.db import init_db, save_race
 from engine.models import RaceData
+from engine.team_colours import TEAM_COLOURS, team_colour
 
 
 # ---------------------------------------------------------------------------
@@ -172,9 +174,16 @@ class TestBuildRaceData:
         ver = next(d for d in race.drivers if d.driver_code == "VER")
         assert ver.full_name == "Max Verstappen"
         assert ver.team == "Red Bull Racing"
+        assert ver.team_colour == "#3671C6"
         assert ver.grid_position == 1
         assert ver.finishing_position == 1
         assert len(ver.laps) == 2
+
+    def test_team_colour_populated_for_known_and_unknown_teams(self):
+        race = _build_race_data(_MockSession(), year=2024, session_type="R")
+        nor = next(d for d in race.drivers if d.driver_code == "NOR")
+        assert nor.team == "McLaren"
+        assert nor.team_colour == "#FF8000"
 
 
 # ---------------------------------------------------------------------------
@@ -217,3 +226,141 @@ class TestDbRoundTrip:
         assert id1 == id2
         assert race_count == 1
         assert lap_count == sum(len(d.laps) for d in race.drivers)
+
+    def test_team_colour_persisted(self):
+        """team_colour written to DB and readable back from drivers table."""
+        race = self._make_race()
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            init_db(conn)
+            race_id = save_race(race, conn)
+            rows = conn.execute(
+                "SELECT driver_code, team_colour FROM drivers WHERE race_id=?",
+                (race_id,),
+            ).fetchall()
+        by_code = {r["driver_code"]: r["team_colour"] for r in rows}
+        assert by_code["VER"] == "#3671C6"
+        assert by_code["NOR"] == "#FF8000"
+
+    def test_track_points_persisted_and_loaded(self):
+        """track_points JSON round-trips through SQLite."""
+        import json
+
+        race = self._make_race()
+        race.track_points = [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            init_db(conn)
+            race_id = save_race(race, conn)
+            raw = conn.execute(
+                "SELECT track_points FROM races WHERE id=?", (race_id,)
+            ).fetchone()["track_points"]
+        assert json.loads(raw) == [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]
+
+
+# ---------------------------------------------------------------------------
+# team_colour lookup
+# ---------------------------------------------------------------------------
+
+class TestTeamColour:
+    def test_known_team_returns_correct_hex(self):
+        assert team_colour("Red Bull Racing") == "#3671C6"
+        assert team_colour("McLaren") == "#FF8000"
+        assert team_colour("Ferrari") == "#E8002D"
+
+    def test_unknown_team_returns_white(self):
+        assert team_colour("Unknown Team XYZ") == "#FFFFFF"
+
+    def test_alias_variants_resolve(self):
+        assert team_colour("AlphaTauri") == team_colour("Racing Bulls")
+
+
+# ---------------------------------------------------------------------------
+# _extract_track_points
+# ---------------------------------------------------------------------------
+
+class _FakeTelemetry:
+    """Minimal stand-in for a FastF1 telemetry DataFrame."""
+
+    def __init__(self, n: int = 120) -> None:
+        xs = [math.cos(2 * math.pi * i / n) * 500.0 for i in range(n)]
+        ys = [math.sin(2 * math.pi * i / n) * 300.0 for i in range(n)]
+        self._df = pd.DataFrame({"X": xs, "Y": ys})
+
+    def __getitem__(self, cols: list[str]) -> pd.DataFrame:
+        return self._df[cols]
+
+    @property
+    def columns(self) -> list[str]:
+        return list(self._df.columns)
+
+
+class _FakeLap:
+    def __init__(self, n: int = 120) -> None:
+        self._tel = _FakeTelemetry(n)
+
+    def get_telemetry(self) -> _FakeTelemetry:
+        return self._tel
+
+
+class _FakeLaps:
+    def __init__(self, n: int = 120) -> None:
+        self._lap = _FakeLap(n)
+
+    def pick_fastest(self) -> _FakeLap:
+        return self._lap
+
+
+class _FakeSession:
+    def __init__(self, n: int = 120) -> None:
+        self.laps = _FakeLaps(n)
+
+
+class TestExtractTrackPoints:
+    def test_returns_normalised_points_in_unit_range(self):
+        points = _extract_track_points(_FakeSession())
+        assert len(points) > 0
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        assert all(0.0 <= x <= 1.0 for x in xs)
+        assert all(0.0 <= y <= 1.0 for y in ys)
+
+    def test_longer_axis_spans_full_unit(self):
+        # x radius 500, y radius 300 → x is the longer axis → max x ≈ 1.0
+        points = _extract_track_points(_FakeSession())
+        xs = [p[0] for p in points]
+        assert max(xs) == pytest.approx(1.0, abs=0.01)
+
+    def test_respects_n_points_limit(self):
+        points = _extract_track_points(_FakeSession(n=1200), n_points=100)
+        assert len(points) <= 110  # allow small overshoot from integer step
+
+    def test_returns_empty_on_missing_xy_columns(self):
+        class _NoXY:
+            @property
+            def columns(self):
+                return ["Speed", "RPM"]
+            def __getitem__(self, cols):
+                raise KeyError(cols)
+
+        class _BadLap:
+            def get_telemetry(self):
+                return _NoXY()
+
+        class _BadLaps:
+            def pick_fastest(self):
+                return _BadLap()
+
+        class _BadSession:
+            laps = _BadLaps()
+
+        assert _extract_track_points(_BadSession()) == []
+
+    def test_returns_empty_on_exception(self):
+        class _BrokenSession:
+            class laps:
+                @staticmethod
+                def pick_fastest():
+                    raise RuntimeError("no telemetry")
+
+        assert _extract_track_points(_BrokenSession()) == []

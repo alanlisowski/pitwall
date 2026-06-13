@@ -57,6 +57,7 @@ class CarState:
     total_time: float       # cumulative race time in seconds
     pace_setting: PaceSetting
     pitted_this_lap: bool
+    current_lap_time: float = 0.0  # last computed lap time; lets UI estimate track position
 
 
 @dataclass
@@ -96,6 +97,7 @@ class _Car:
     pace_setting: PaceSetting
     planned_pits: dict[int, str]    # lap → new compound (AI only; empty for player)
     is_player: bool
+    last_lap_time: float = 0.0      # most recent computed lap time
 
 
 # --------------------------------------------------------------------------- #
@@ -282,6 +284,7 @@ class RaceSession:
                 pace_setting=s.pace_setting,
             )
             s.total_time += lt
+            s.last_lap_time = lt
             self._last_pitted[driver] = is_pit
 
             if is_pit:
@@ -389,6 +392,7 @@ class RaceSession:
                 total_time=self._cars[d].total_time,
                 pace_setting=self._cars[d].pace_setting,
                 pitted_this_lap=self._last_pitted.get(d, False),
+                current_lap_time=self._cars[d].last_lap_time,
             )
             for pos, d in enumerate(order, 1)
         ]

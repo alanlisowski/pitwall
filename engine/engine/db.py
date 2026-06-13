@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,7 +28,7 @@ def connect(db_path: Path | str = DEFAULT_DB) -> Generator[sqlite3.Connection, N
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create tables if they don't already exist."""
+    """Create tables if they don't already exist, and migrate older schemas."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS races (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +38,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             circuit      TEXT NOT NULL,
             total_laps   INTEGER NOT NULL,
             session_type TEXT NOT NULL DEFAULT 'R',
+            track_points TEXT,
             UNIQUE(year, gp_name, session_type)
         )
     """)
@@ -48,6 +50,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             driver_code        TEXT NOT NULL,
             full_name          TEXT NOT NULL,
             team               TEXT NOT NULL,
+            team_colour        TEXT NOT NULL DEFAULT '',
             grid_position      INTEGER NOT NULL,
             finishing_position INTEGER NOT NULL,
             UNIQUE(race_id, driver_number)
@@ -66,20 +69,31 @@ def init_db(conn: sqlite3.Connection) -> None:
             is_pit_out_lap INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # Migrate databases that pre-date these columns.
+    for _sql in (
+        "ALTER TABLE races ADD COLUMN track_points TEXT",
+        "ALTER TABLE drivers ADD COLUMN team_colour TEXT NOT NULL DEFAULT ''",
+    ):
+        try:
+            conn.execute(_sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def save_race(race: RaceData, conn: sqlite3.Connection) -> int:
     """Upsert a RaceData into the database and return the race id."""
+    track_json = _json.dumps(race.track_points) if race.track_points else None
     conn.execute(
         """
-        INSERT INTO races (year, gp_name, gp_key, circuit, total_laps, session_type)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO races (year, gp_name, gp_key, circuit, total_laps, session_type, track_points)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(year, gp_name, session_type) DO UPDATE SET
-            gp_key     = excluded.gp_key,
-            circuit    = excluded.circuit,
-            total_laps = excluded.total_laps
+            gp_key       = excluded.gp_key,
+            circuit      = excluded.circuit,
+            total_laps   = excluded.total_laps,
+            track_points = excluded.track_points
         """,
-        (race.year, race.gp_name, race.gp_key, race.circuit_name, race.total_laps, race.session_type),
+        (race.year, race.gp_name, race.gp_key, race.circuit_name, race.total_laps, race.session_type, track_json),
     )
     race_id: int = conn.execute(
         "SELECT id FROM races WHERE year=? AND gp_name=? AND session_type=?",
@@ -90,11 +104,12 @@ def save_race(race: RaceData, conn: sqlite3.Connection) -> int:
         conn.execute(
             """
             INSERT INTO drivers
-                (race_id, driver_number, driver_code, full_name, team,
+                (race_id, driver_number, driver_code, full_name, team, team_colour,
                  grid_position, finishing_position)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(race_id, driver_number) DO UPDATE SET
                 driver_code        = excluded.driver_code,
+                team_colour        = excluded.team_colour,
                 grid_position      = excluded.grid_position,
                 finishing_position = excluded.finishing_position
             """,
@@ -104,6 +119,7 @@ def save_race(race: RaceData, conn: sqlite3.Connection) -> int:
                 driver.driver_code,
                 driver.full_name,
                 driver.team,
+                driver.team_colour,
                 driver.grid_position,
                 driver.finishing_position,
             ),

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from .models import DriverData, LapData, RaceData
+from .team_colours import team_colour as _team_colour
 
 if TYPE_CHECKING:
     pass
@@ -133,13 +134,15 @@ def _build_race_data(
     for driver_number, group in laps.groupby("DriverNumber"):
         dn = str(driver_number)
         first_row = group.iloc[0]
+        team_name = _safe_str(first_row.get("Team"), "Unknown")
         drivers.append(
             DriverData(
                 driver_number=dn,
                 # Driver column = 3-letter code; Team column is in laps too
                 driver_code=_safe_str(first_row.get("Driver"), dn),
                 full_name=names.get(dn, dn),
-                team=_safe_str(first_row.get("Team"), "Unknown"),
+                team=team_name,
+                team_colour=_team_colour(team_name),
                 grid_position=grid.get(dn, 0),
                 finishing_position=finish.get(dn, 0),
                 laps=_parse_driver_laps(group),
@@ -161,6 +164,45 @@ def _build_race_data(
 
 
 # ---------------------------------------------------------------------------
+# Track geometry extraction
+# ---------------------------------------------------------------------------
+
+def _extract_track_points(session: Any, n_points: int = 300) -> list[list[float]]:
+    """Return a normalised centre-line polyline from the session's fastest lap.
+
+    Coordinates are scaled so the longest axis spans [0, 1] (aspect ratio
+    preserved); the shorter axis is in [0, scale] where scale <= 1.
+    Returns an empty list if telemetry is unavailable.
+    """
+    try:
+        fastest = session.laps.pick_fastest()
+        tel = fastest.get_telemetry()
+        if "X" not in tel.columns or "Y" not in tel.columns:
+            return []
+        tel = tel[["X", "Y"]].dropna()
+        if len(tel) < 10:
+            return []
+
+        step = max(1, len(tel) // n_points)
+        tel = tel.iloc[::step]
+
+        x = tel["X"].to_numpy(dtype=float)
+        y = tel["Y"].to_numpy(dtype=float)
+
+        x_range = float(x.max() - x.min())
+        y_range = float(y.max() - y.min())
+        scale = max(x_range, y_range) or 1.0
+
+        x_norm = (x - x.min()) / scale
+        y_norm = (y - y.min()) / scale
+
+        return [[round(float(xi), 4), round(float(yi), 4)] for xi, yi in zip(x_norm, y_norm)]
+    except Exception as exc:
+        logger.warning("Could not extract track points: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -176,8 +218,10 @@ def load_race(year: int, gp: str, session: str = "R") -> RaceData:
     _enable_cache()
     logger.info("Loading %s %d session=%s from FastF1...", gp, year, session)
     sess = _ff1.get_session(year, gp, session)
-    sess.load(laps=True, telemetry=False, weather=False, messages=False)
-    return _build_race_data(sess, year=year, session_type=session, gp_key=gp)
+    sess.load(laps=True, telemetry=True, weather=False, messages=False)
+    race = _build_race_data(sess, year=year, session_type=session, gp_key=gp)
+    race.track_points = _extract_track_points(sess)
+    return race
 
 
 # ---------------------------------------------------------------------------
