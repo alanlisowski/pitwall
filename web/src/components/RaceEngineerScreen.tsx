@@ -1027,23 +1027,96 @@ const WHEEL_TIMINGS: Array<{
   fittingAt?: number;
   doneAt: number;
 }> = [
-  { id: "FL", doneAt: 350 },
-  { id: "FR", doneAt: 580 },
-  { id: "RL", fittingAt: 920,  doneAt: 1320 },
-  { id: "RR", fittingAt: 1640, doneAt: 2080 },
+  { id: "FL", doneAt: 700 },
+  { id: "FR", doneAt: 1500 },
+  { id: "RL", fittingAt: 1900, doneAt: 2400 },
+  { id: "RR", fittingAt: 2800, doneAt: 3300 },
 ];
 
-const CLOCK_SETTLE_MS = 2080;
+const CLOCK_SETTLE_MS = 3300;
 const CLOCK_PEAK_S    = 2.45;
-const DISMISS_MS      = 2550;
+const DISMISS_MS      = 4600;
 
-const RADIO_CALLS = [
-  '"Box, box, box — great stop, boys!"',
-  '"Out lap, push push push. Get those tyres switched on."',
-  '"Clean stop. Now let\'s make the undercut work."',
-  '"Excellent work in the box. Push now, we need the gap."',
-  '"Great tyre change. Car\'s back in the window — go go go!"',
+// Out-lap lines shown inside the pit-stop HUD (engineer to driver)
+const PIT_RADIO_CALLS = [
+  '"Out lap, push push push. Get those tyres working."',
+  '"Clean stop. Focus on the out lap now — give me everything."',
+  "\"Let's make this undercut count. Push, push, push.\"",
+  '"Good stop. Car\'s back in the window — go, go, go!"',
+  '"Beauty of a stop. Now I need your best lap."',
 ];
+
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// Contextual radio pools keyed by event type
+const RADIO = {
+  pitBoxCall: [
+    '"Box now, box now. Tyres are ready."',
+    '"Box this lap. Box, box, box."',
+    '"Come on in — pit lane is clear."',
+    '"Box box box. We\'re ready for you."',
+  ],
+  tyreCliff: [
+    '"These tyres are gone. I need to box."',
+    '"I\'m really struggling out here. Are we boxing soon?"',
+    '"The rear is completely gone. I\'ve got nothing left."',
+    '"Every lap is getting slower. We need to react."',
+  ],
+  positionGain: (pos: number): string[] => [
+    `"That's P${pos} — great job! Keep the pressure on."`,
+    `"You're P${pos} now. Excellent work, stay focused."`,
+    `"We took one back. P${pos}. The strategy is working."`,
+    `"Brilliant move. P${pos}. Let's build on that gap."`,
+  ],
+  positionLoss: [
+    '"We\'ll get that back. Head down, stay focused."',
+    '"Don\'t worry, we have the pace. Keep pushing."',
+    '"It\'s fine, it\'s fine. We\'ll fight our way back."',
+    '"Trust the strategy. We\'ll come back at them."',
+  ],
+  rivalPit: (driver: string): string[] => [
+    `"${driver} has pitted — watch the undercut."`,
+    `"${driver}'s in the box. He's the undercut threat."`,
+    `"${driver} boxed. He'll be coming out on fresh tyres."`,
+    `"${driver} pitting — we need to monitor this closely."`,
+  ],
+  safetyCar: [
+    '"Safety car — box now if you want it. Basically free."',
+    '"Safety car deployed. Do you want the stop? This is the window."',
+    '"Free stop opportunity. Safety car\'s out — your call."',
+    '"Virtual safety car. Now\'s the time if we want to box."',
+  ],
+};
+
+// Famous real F1 radio lines — surfaced rarely as easter eggs
+const EASTER_EGGS: Array<{
+  driver?: string;
+  speaker: "DRIVER" | "ENGINEER";
+  text: string;
+}> = [
+  { driver: "LEC", speaker: "DRIVER",   text: '"Is there a leakage? A leakage of what?"' },
+  { driver: "NOR", speaker: "DRIVER",   text: '"Uh... talent!"' },
+  { driver: "VER", speaker: "DRIVER",   text: '"Karma!"' },
+  { driver: "HAM", speaker: "DRIVER",   text: '"This is the greatest car I\'ve ever driven."' },
+  { driver: "ALO", speaker: "ENGINEER", text: '"Fernando is faster than you."' },
+  { driver: "SAI", speaker: "DRIVER",   text: '"Grazie ragazzi. Grazie."' },
+  { driver: "PIA", speaker: "DRIVER",   text: '"Sorry, I thought you said go, so I went."' },
+  { driver: "RUS", speaker: "DRIVER",   text: '"Valtteri, it\'s James. This is so, so good."' },
+  { speaker: "DRIVER",   text: '"Bono, my tyres are gone."' },
+  { speaker: "ENGINEER", text: '"Multi-21, Seb. Multi-21."' },
+  { speaker: "DRIVER",   text: '"I think I need new brakes. I think I need everything, actually."' },
+  { speaker: "DRIVER",   text: '"This thing is an absolute beast."' },
+];
+
+function maybeEasterEgg(
+  driverCode: string,
+): typeof EASTER_EGGS[0] | null {
+  if (Math.random() > 0.08) return null; // ~8% chance
+  const pool = EASTER_EGGS.filter((e) => !e.driver || e.driver === driverCode);
+  return pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
+}
 
 interface PitHudInfo {
   prevCompound: string;
@@ -1055,6 +1128,13 @@ interface PitHudInfo {
   teamColour: string;
   fullName: string;
   team: string;
+}
+
+interface RadioMsg {
+  id: string;
+  speaker: "DRIVER" | "ENGINEER";
+  text: string;
+  teamColour: string;
 }
 
 function WheelIndicator({ label, state }: { label: string; state: WheelState }) {
@@ -1106,7 +1186,7 @@ function PitStopHUD({ info, onDismiss }: { info: PitHudInfo; onDismiss: () => vo
   const [clockMs, setClockMs] = useState(0);
   const [settled, setSettled] = useState(false);
   const radioLine = useMemo(
-    () => RADIO_CALLS[Math.floor(Math.random() * RADIO_CALLS.length)],
+    () => PIT_RADIO_CALLS[Math.floor(Math.random() * PIT_RADIO_CALLS.length)],
     [],
   );
 
@@ -1340,22 +1420,32 @@ function PitStopHUD({ info, onDismiss }: { info: PitHudInfo; onDismiss: () => vo
 
         {/* Team radio */}
         <div style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 8,
-          padding: "9px 20px 7px",
+          background: "#0c0c14",
           borderBottom: "1px solid #0e0e16",
         }}>
-          <span style={{ fontSize: 11, color: "#3f3f46", flexShrink: 0, marginTop: 1 }}>🎙</span>
-          <p style={{
-            fontSize: 10,
-            color: "#4a4a5a",
-            fontFamily: DATA_FONT,
-            fontStyle: "italic",
-            lineHeight: 1.5,
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "5px 14px 4px",
+            background: info.teamColour + "22",
+            borderBottom: "1px solid " + info.teamColour + "30",
           }}>
-            {radioLine}
-          </p>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.22em", color: info.teamColour, textTransform: "uppercase" }}>
+              🎧 ENGINEER
+            </span>
+          </div>
+          <div style={{ padding: "8px 14px 10px" }}>
+            <p style={{
+              fontSize: 13,
+              color: "#ECE7DA",
+              fontFamily: DATA_FONT,
+              fontStyle: "italic",
+              lineHeight: 1.45,
+            }}>
+              {radioLine}
+            </p>
+          </div>
         </div>
 
         {/* Skip hint */}
@@ -1364,6 +1454,98 @@ function PitStopHUD({ info, onDismiss }: { info: PitHudInfo; onDismiss: () => vo
             Click to skip →
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TeamRadio ────────────────────────────────────────────────────────────────
+
+const WAVEFORM_HEIGHTS = Array.from(
+  { length: 24 },
+  (_, i) => 3 + (Math.sin(i * 0.72) * 0.5 + 0.5) * 13,
+);
+
+function RadioWaveform({ colour }: { colour: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 2, height: 20, overflow: "hidden" }}>
+      {WAVEFORM_HEIGHTS.map((h, i) => (
+        <div
+          key={i}
+          style={{
+            width: 3,
+            height: h,
+            background: colour,
+            opacity: 0.7,
+            animation: `wave-bar ${0.45 + (i % 4) * 0.12}s ease-in-out infinite alternate`,
+            animationDelay: `${i * 0.055}s`,
+            transformOrigin: "bottom",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TeamRadio({ msg, onDismiss }: { msg: RadioMsg; onDismiss: () => void }) {
+  const isDriver = msg.speaker === "DRIVER";
+  const textColour = isDriver ? msg.teamColour : "#ECE7DA";
+  const icon = isDriver ? "🎮" : "🎧";
+  const label = isDriver ? "DRIVER RADIO" : "ENGINEER RADIO";
+
+  return (
+    <div
+      onClick={onDismiss}
+      style={{
+        position: "absolute",
+        bottom: 170,
+        left: "50%",
+        zIndex: 45,
+        cursor: "pointer",
+        minWidth: 340,
+        maxWidth: 500,
+        fontFamily: F1_FONT,
+        animation: "radio-slide-in 0.35s cubic-bezier(0.22,1,0.36,1)",
+        filter: "drop-shadow(0 4px 24px rgba(0,0,0,0.7))",
+      }}
+    >
+      {/* Coloured header bar */}
+      <div style={{
+        background: msg.teamColour,
+        padding: "5px 14px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}>
+        <span style={{
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.25em",
+          color: "#000",
+          textTransform: "uppercase",
+        }}>
+          {icon} {label}
+        </span>
+        <RadioWaveform colour="#000" />
+      </div>
+
+      {/* Body */}
+      <div style={{
+        background: "#0d0d14",
+        border: `1px solid ${msg.teamColour}44`,
+        borderTop: "none",
+        padding: "10px 16px 12px",
+      }}>
+        <p style={{
+          fontSize: 15,
+          color: textColour,
+          fontFamily: DATA_FONT,
+          fontStyle: "italic",
+          lineHeight: 1.45,
+          margin: 0,
+        }}>
+          {msg.text}
+        </p>
       </div>
     </div>
   );
@@ -1846,6 +2028,30 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const [raceError, setRaceError] = useState<string | null>(null);
   const [trackPoints, setTrackPoints] = useState<number[][]>([]);
   const [pitHudInfo, setPitHudInfo] = useState<PitHudInfo | null>(null);
+  const [radioQueue, setRadioQueue] = useState<RadioMsg[]>([]);
+
+  // Stable helper — queues a radio message
+  const addRadio = useCallback((msg: Omit<RadioMsg, "id">) => {
+    const id = Math.random().toString(36).slice(2);
+    setRadioQueue((q) => [...q, { ...msg, id }]);
+  }, []);
+
+  const dismissRadio = useCallback(() => {
+    setRadioQueue((q) => q.slice(1));
+  }, []);
+
+  // Auto-dismiss front of queue after 5.5 s
+  useEffect(() => {
+    if (radioQueue.length === 0) return;
+    const t = setTimeout(dismissRadio, 5500);
+    return () => clearTimeout(t);
+  // Re-run only when the front message changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [radioQueue[0]?.id]);
+
+  // Ref so the play-loop closure can call addRadio without a stale capture
+  const addRadioRef = useRef(addRadio);
+  addRadioRef.current = addRadio;
 
   // Refs to avoid stale closures in async callbacks
   const advancingRef = useRef(false);
@@ -2028,11 +2234,13 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         setDisplayIdx((d) => d + 1);
       } else {
         const pid = playerIdRef.current;
+        const teamColour = teamColours.get(pid) ?? "#ef4444";
         const prePitCar = history[history.length - 1]?.cars.find((c) => c.driver === pid);
         const state = await doStep(sessionIdRef.current, pendingPaceRef.current);
         if (state) {
           setDisplayIdx((d) => d + 1);
           const playerAfter = state.cars.find((c) => c.driver === pid);
+
           if (prePitCar && playerAfter?.pitted_this_lap) {
             // Player just pitted — show the broadcast HUD, then auto-resume
             const m = driverMeta.get(pid);
@@ -2043,7 +2251,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
               positionBefore: prePitCar.position,
               positionAfter: playerAfter.position,
               lap: state.lap,
-              teamColour: teamColours.get(pid) ?? "#ef4444",
+              teamColour,
               fullName: m?.fullName ?? pid,
               team: m?.team ?? "",
             });
@@ -2052,10 +2260,52 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           } else if (state.finished) {
             setPhase("finished");
             setPlaying(false);
-          } else if (state.events.some(
-            (e) => e.kind === EV.RIVAL_PITTED || e.kind === EV.TYRE_CLIFF_WARNING,
-          )) {
-            setPlaying(false);
+          } else {
+            // Contextual radio triggers
+            let posRadioFired = false;
+
+            if (prePitCar && playerAfter) {
+              const prevPos = prePitCar.position;
+              const newPos  = playerAfter.position;
+              if (newPos < prevPos) {
+                posRadioFired = true;
+                addRadioRef.current({
+                  speaker: "ENGINEER",
+                  text: pick(RADIO.positionGain(newPos)),
+                  teamColour,
+                });
+                const egg = maybeEasterEgg(pid);
+                if (egg) setTimeout(() => addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour }), 6000);
+              } else if (newPos > prevPos) {
+                posRadioFired = true;
+                addRadioRef.current({ speaker: "ENGINEER", text: pick(RADIO.positionLoss), teamColour });
+                const egg = maybeEasterEgg(pid);
+                if (egg) setTimeout(() => addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour }), 6000);
+              }
+            }
+
+            for (const ev of state.events) {
+              if (ev.kind === EV.TYRE_CLIFF_WARNING) {
+                addRadioRef.current({ speaker: "DRIVER", text: pick(RADIO.tyreCliff), teamColour });
+                setPlaying(false);
+              } else if (ev.kind === EV.RIVAL_PITTED && ev.driver) {
+                addRadioRef.current({
+                  speaker: "ENGINEER",
+                  text: pick(RADIO.rivalPit(ev.driver)),
+                  teamColour,
+                });
+                setPlaying(false);
+              } else if (ev.kind === EV.SAFETY_CAR_DEPLOYED) {
+                addRadioRef.current({ speaker: "ENGINEER", text: pick(RADIO.safetyCar), teamColour });
+                setPlaying(false);
+              }
+            }
+
+            // Rare easter egg on a quiet lap (no other radio fired)
+            if (!posRadioFired && state.events.length === 0 && Math.random() < 0.03) {
+              const egg = maybeEasterEgg(pid);
+              if (egg) addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour });
+            }
           }
         }
       }
@@ -2175,6 +2425,11 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const handlePitCompound = (c: Compound) => {
     setPendingPit(c);
     pendingPitRef.current = c;
+    addRadio({
+      speaker: "ENGINEER",
+      text: pick(RADIO.pitBoxCall),
+      teamColour: teamColours.get(playerId) ?? "#ef4444",
+    });
   };
 
   return (
@@ -2252,6 +2507,11 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           onSkip={skipToNext}
           onSpeedToggle={() => setSpeed((s) => (s === 1 ? 4 : 1))}
         />
+      )}
+
+      {/* Team radio panel — slides in above the lower-third */}
+      {radioQueue[0] && !pitHudInfo && (
+        <TeamRadio msg={radioQueue[0]} onDismiss={dismissRadio} />
       )}
 
       {/* Broadcast pit-stop HUD — overlays the section during a player pit */}
