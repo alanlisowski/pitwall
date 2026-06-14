@@ -15,27 +15,9 @@ import { StintTimeline } from "./components/StintTimeline";
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 
-function Spinner() {
+export function Spinner() {
   return (
-    <svg
-      className="animate-spin h-4 w-4 text-zinc-500"
-      viewBox="0 0 24 24"
-      fill="none"
-    >
-      <circle
-        className="opacity-20"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-      />
-    </svg>
+    <span className="inline-block w-4 h-4 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin shrink-0" />
   );
 }
 
@@ -45,11 +27,16 @@ export default function App() {
   const [mode, setMode] = useState<"strategy" | "race">("strategy");
 
   const [races, setRaces] = useState<RaceSummary[]>([]);
+  const [racesLoading, setRacesLoading] = useState(true);
+  const [racesWaking, setRacesWaking] = useState(false);
   const [racesError, setRacesError] = useState<string | null>(null);
+  const [racesRetryKey, setRacesRetryKey] = useState(0);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [baselineRetryKey, setBaselineRetryKey] = useState(0);
   const [baseline, setBaseline] = useState<BaselineResponse | null>(null);
   const [loadingBaseline, setLoadingBaseline] = useState(false);
+  const [baselineWaking, setBaselineWaking] = useState(false);
   const [baselineError, setBaselineError] = useState<string | null>(null);
 
   const [editedStrategies, setEditedStrategies] = useState<CarStrategySchema[]>([]);
@@ -59,29 +46,91 @@ export default function App() {
   const [loadingCompare, setLoadingCompare] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
 
-  // ── Load race list ──────────────────────────────────────────────────────────
+  // ── Load race list with retry for Render cold-start ────────────────────────
   useEffect(() => {
-    fetchRaces()
-      .then(setRaces)
-      .catch((e: Error) => setRacesError(e.message));
-  }, []);
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let attempt = 0;
 
-  // ── Load baseline when race changes ────────────────────────────────────────
+    setRacesLoading(true);
+    setRacesWaking(false);
+    setRacesError(null);
+
+    async function tryFetch() {
+      try {
+        const data = await fetchRaces();
+        if (!cancelled) {
+          setRaces(data);
+          setRacesLoading(false);
+          setRacesWaking(false);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        attempt += 1;
+        if (attempt < 15) {
+          setRacesLoading(false);
+          setRacesWaking(true);
+          timeoutId = setTimeout(tryFetch, 3000);
+        } else {
+          setRacesLoading(false);
+          setRacesWaking(false);
+          setRacesError((e as Error).message);
+        }
+      }
+    }
+
+    tryFetch();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [racesRetryKey]);
+
+  // ── Load baseline when race changes, with retry for cold-start ─────────────
   useEffect(() => {
     if (selectedId === null) return;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let attempt = 0;
+
     setLoadingBaseline(true);
     setBaseline(null);
     setBaselineError(null);
+    setBaselineWaking(false);
     setEditingDriver(null);
     setCompareResult(null);
-    fetchBaseline(selectedId)
-      .then((b) => {
-        setBaseline(b);
-        setEditedStrategies(b.strategies);
-      })
-      .catch((e: Error) => setBaselineError(e.message))
-      .finally(() => setLoadingBaseline(false));
-  }, [selectedId]);
+
+    async function tryFetch() {
+      try {
+        const b = await fetchBaseline(selectedId!);
+        if (!cancelled) {
+          setBaseline(b);
+          setEditedStrategies(b.strategies);
+          setLoadingBaseline(false);
+          setBaselineWaking(false);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        attempt += 1;
+        if (attempt < 8) {
+          setLoadingBaseline(false);
+          setBaselineWaking(true);
+          timeoutId = setTimeout(tryFetch, 5000);
+        } else {
+          setLoadingBaseline(false);
+          setBaselineWaking(false);
+          setBaselineError((e as Error).message);
+        }
+      }
+    }
+
+    tryFetch();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, baselineRetryKey]);
 
   // ── Strategy edit ───────────────────────────────────────────────────────────
   const handleStrategyChange = useCallback((updated: CarStrategySchema) => {
@@ -135,14 +184,39 @@ export default function App() {
             </p>
           </div>
           <div className="flex-1 min-w-0">
-            <RacePicker
-              races={races}
-              selectedId={selectedId}
-              onSelect={(id) => {
-                setSelectedId(id);
-                setMode("strategy");
-              }}
-            />
+            {racesLoading ? (
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <Spinner />
+                <span>Loading races…</span>
+              </div>
+            ) : racesWaking ? (
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <Spinner />
+                <span>
+                  Waking up the server…{" "}
+                  <span className="text-zinc-600">first load can take ~30s</span>
+                </span>
+              </div>
+            ) : racesError ? (
+              <div className="flex items-center gap-2 text-xs text-amber-400">
+                <span>Could not reach the server.</span>
+                <button
+                  onClick={() => setRacesRetryKey((k) => k + 1)}
+                  className="border border-amber-800 hover:border-amber-600 px-2 py-0.5 rounded text-amber-300 hover:text-amber-100 transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <RacePicker
+                races={races}
+                selectedId={selectedId}
+                onSelect={(id) => {
+                  setSelectedId(id);
+                  setMode("strategy");
+                }}
+              />
+            )}
           </div>
 
           {baseline && (
@@ -176,25 +250,8 @@ export default function App() {
 
       {/* ── Main content ──────────────────────────────────────────────────── */}
       <main className="max-w-7xl mx-auto px-4 md:px-8 py-6 space-y-5">
-        {/* API connection warning */}
-        {racesError && (
-          <div className="p-3 bg-amber-950/40 border border-amber-900 text-amber-300 text-xs rounded flex gap-2">
-            <span className="shrink-0 font-bold">!</span>
-            <span>
-              Could not reach the API.{" "}
-              <span className="font-bold">
-                Start it with:{" "}
-                <code className="text-amber-200 bg-amber-950/60 px-1 py-0.5 rounded">
-                  uvicorn api.main:app --reload
-                </code>{" "}
-                from <code className="text-amber-200">engine/</code>
-              </span>
-            </span>
-          </div>
-        )}
-
         {/* Empty / explainer state */}
-        {!baseline && !loadingBaseline && !baselineError && <Explainer />}
+        {!baseline && !loadingBaseline && !baselineWaking && !baselineError && <Explainer />}
 
         {/* Baseline loading */}
         {loadingBaseline && (
@@ -204,10 +261,27 @@ export default function App() {
           </div>
         )}
 
+        {/* Baseline waking (retrying after cold-start) */}
+        {baselineWaking && (
+          <div className="flex items-center gap-2 text-zinc-400 text-sm py-4">
+            <Spinner />
+            <span>
+              Waking up the server…{" "}
+              <span className="text-zinc-600">first load can take ~30s</span>
+            </span>
+          </div>
+        )}
+
         {/* Baseline load error */}
         {baselineError && (
-          <div className="p-3 bg-red-950/40 border border-red-900 text-red-300 text-sm rounded">
-            {baselineError}
+          <div className="p-3 bg-red-950/40 border border-red-900 text-red-300 text-sm rounded flex items-center gap-3">
+            <span className="flex-1">{baselineError}</span>
+            <button
+              onClick={() => setBaselineRetryKey((k) => k + 1)}
+              className="shrink-0 border border-red-800 hover:border-red-600 px-2 py-0.5 rounded text-red-300 hover:text-red-100 transition-colors text-xs"
+            >
+              Retry
+            </button>
           </div>
         )}
 

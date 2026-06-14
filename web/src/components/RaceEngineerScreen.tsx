@@ -1034,6 +1034,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const [selectedDriver, setSelectedDriver] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [starting, setStarting] = useState(false);
+  const [startWaking, setStartWaking] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const [sessionId, setSessionId] = useState("");
@@ -1098,22 +1099,39 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     if (!selectedDriver) return;
     setStarting(true);
     setStartError(null);
-    try {
-      const resp = await startRace({
-        race_id: baseline.race.id,
-        driver_id: selectedDriver,
-        difficulty,
-        seed: 42,
-      });
-      setSessionId(resp.session_id);
-      setHistory([resp.state]);
-      setDisplayIdx(0);
-      setPhase("racing");
-    } catch (err) {
-      setStartError((err as Error).message);
-    } finally {
-      setStarting(false);
+    setStartWaking(false);
+
+    let attempt = 0;
+    const MAX_ATTEMPTS = 5;
+
+    while (attempt < MAX_ATTEMPTS) {
+      try {
+        const resp = await startRace({
+          race_id: baseline.race.id,
+          driver_id: selectedDriver,
+          difficulty,
+          seed: 42,
+        });
+        setSessionId(resp.session_id);
+        setHistory([resp.state]);
+        setDisplayIdx(0);
+        setPhase("racing");
+        setStarting(false);
+        setStartWaking(false);
+        return;
+      } catch (err) {
+        attempt += 1;
+        if (attempt < MAX_ATTEMPTS) {
+          setStartWaking(true);
+          await new Promise<void>((r) => setTimeout(r, 5000));
+        } else {
+          setStartError((err as Error).message);
+        }
+      }
     }
+
+    setStarting(false);
+    setStartWaking(false);
   };
 
   const doAdvance = useCallback(
@@ -1203,6 +1221,13 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         {startError && (
           <div className="p-2 bg-red-950/40 border border-red-900 text-red-300 text-xs rounded">
             {startError}
+          </div>
+        )}
+
+        {starting && startWaking && (
+          <div className="flex items-center gap-2 text-zinc-400 text-xs">
+            <span className="inline-block w-3 h-3 border-2 border-zinc-600 border-t-zinc-300 rounded-full animate-spin shrink-0" />
+            Waking up the server… first load can take ~30s
           </div>
         )}
 
