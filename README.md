@@ -6,7 +6,9 @@
 <sub>(free-tier API — the first request may take ~30s to wake the server)</sub>
 
 
-![Demo placeholder](https://www.youtube.com/watch?v=jHMH_78jw44)
+[![Watch the PitWall demo](https://img.youtube.com/vi/jHMH_78jw44/hqdefault.jpg)](https://www.youtube.com/watch?v=jHMH_78jw44)
+
+<sub>▶ Click the thumbnail to watch the demo on YouTube</sub>
 
 PitWall has two modes:
 
