@@ -2,11 +2,11 @@
 
 > Pick a Grand Prix. Edit a pit-stop strategy — or race it yourself in real time.
 
-**Live demo:** <!-- add your Vercel URL --> · **API:** https://pitwall-rugf.onrender.com/docs
+**Live demo:** https://pitwall-mu-five.vercel.app/ · **API:** https://pitwall-rugf.onrender.com/docs
 <sub>(free-tier API — the first request may take ~30s to wake the server)</sub>
 
-<!-- Drop a screen-recording here once deployed (e.g. Loom → GIF via gifski) -->
-![Demo placeholder](docs/demo.gif)
+
+![Demo placeholder](https://www.youtube.com/watch?v=jHMH_78jw44)
 
 PitWall has two modes:
 
