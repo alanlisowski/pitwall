@@ -2575,13 +2575,12 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
                 fireCriticalRef.current({ speaker: "DRIVER", text: pick(RADIO.tyreCliff), teamColour });
                 setPlaying(false);
               } else if (ev.kind === EV.RIVAL_PITTED && ev.driver) {
-                // Non-critical — respects cooldown
+                // Non-critical — fire radio only, no pause (player has no decision to make)
                 fireNonCriticalRef.current({
                   speaker: "ENGINEER",
                   text: pick(RADIO.rivalPit(ev.driver)),
                   teamColour,
                 }, state.lap);
-                setPlaying(false);
               } else if (ev.kind === EV.SAFETY_CAR_DEPLOYED) {
                 // Critical — always fires
                 fireCriticalRef.current({ speaker: "ENGINEER", text: pick(RADIO.safetyCar), teamColour });

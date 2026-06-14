@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { compare as apiCompare, fetchBaseline, fetchRaces } from "./api/client";
 import type {
   BaselineResponse,
@@ -32,7 +32,10 @@ export default function App() {
   const [racesError, setRacesError] = useState<string | null>(null);
   const [racesRetryKey, setRacesRetryKey] = useState(0);
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // pickerValue = what's highlighted in the race dropdown (display only)
+  // committedId = what actually triggers a baseline load (set only on explicit button click)
+  const [pickerValue, setPickerValue] = useState<number | null>(null);
+  const [committedId, setCommittedId] = useState<number | null>(null);
   const [baselineRetryKey, setBaselineRetryKey] = useState(0);
   const [baseline, setBaseline] = useState<BaselineResponse | null>(null);
   const [loadingBaseline, setLoadingBaseline] = useState(false);
@@ -45,6 +48,9 @@ export default function App() {
   const [compareResult, setCompareResult] = useState<CompareResponse | null>(null);
   const [loadingCompare, setLoadingCompare] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
+
+  const [needsRaceToast, setNeedsRaceToast] = useState(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Load race list with retry for Render cold-start ────────────────────────
   useEffect(() => {
@@ -86,9 +92,9 @@ export default function App() {
     };
   }, [racesRetryKey]);
 
-  // ── Load baseline when race changes, with retry for cold-start ─────────────
+  // ── Load baseline only when committedId changes (set by explicit button click) ─
   useEffect(() => {
-    if (selectedId === null) return;
+    if (committedId === null) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
     let attempt = 0;
@@ -102,7 +108,7 @@ export default function App() {
 
     async function tryFetch() {
       try {
-        const b = await fetchBaseline(selectedId!);
+        const b = await fetchBaseline(committedId!);
         if (!cancelled) {
           setBaseline(b);
           setEditedStrategies(b.strategies);
@@ -130,7 +136,7 @@ export default function App() {
       clearTimeout(timeoutId);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, baselineRetryKey]);
+  }, [committedId, baselineRetryKey]);
 
   // ── Strategy edit ───────────────────────────────────────────────────────────
   const handleStrategyChange = useCallback((updated: CarStrategySchema) => {
@@ -142,12 +148,12 @@ export default function App() {
 
   // ── Run compare ─────────────────────────────────────────────────────────────
   const runCompare = useCallback(async () => {
-    if (!baseline || selectedId === null) return;
+    if (!baseline || committedId === null) return;
     setLoadingCompare(true);
     setCompareError(null);
     try {
       const result = await apiCompare({
-        race_id: selectedId,
+        race_id: committedId,
         strategy_a: baseline.strategies,
         strategy_b: editedStrategies,
       });
@@ -157,7 +163,7 @@ export default function App() {
     } finally {
       setLoadingCompare(false);
     }
-  }, [baseline, selectedId, editedStrategies]);
+  }, [baseline, committedId, editedStrategies]);
 
   const resetEdits = useCallback(() => {
     if (!baseline) return;
@@ -165,6 +171,21 @@ export default function App() {
     setEditingDriver(null);
     setCompareResult(null);
   }, [baseline]);
+
+  // ── Enter a mode (card CTA or header toggle) ────────────────────────────────
+  // If no race is selected in the picker, show a toast and bail.
+  // If a race is selected but not yet committed (or a different one), commit it.
+  // If baseline is already loaded for this same race, just switch modes.
+  const handleEnterMode = useCallback((m: "race" | "strategy") => {
+    if (pickerValue === null) {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setNeedsRaceToast(true);
+      toastTimerRef.current = setTimeout(() => setNeedsRaceToast(false), 3500);
+      return;
+    }
+    setMode(m);
+    if (pickerValue !== committedId) setCommittedId(pickerValue);
+  }, [pickerValue, committedId]);
 
   const isEdited =
     baseline !== null &&
@@ -236,13 +257,17 @@ export default function App() {
             ) : (
               <RacePicker
                 races={races}
-                selectedId={selectedId}
-                onSelect={(id) => setSelectedId(id)}
+                selectedId={pickerValue}
+                onSelect={(id) => {
+                  setPickerValue(id);
+                  // Already in a mode — reload baseline immediately for the new race
+                  if (committedId !== null) setCommittedId(id);
+                }}
               />
             )}
           </div>
 
-          {baseline && (
+          {!racesLoading && !racesWaking && !racesError && races.length > 0 && (
             <div
               className="shrink-0"
               style={{
@@ -257,7 +282,11 @@ export default function App() {
               {(["race", "strategy"] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => setMode(m)}
+                  onClick={() => {
+                    // Once in a mode (baseline loaded), just switch — no re-commit needed
+                    if (baseline !== null) { setMode(m); return; }
+                    handleEnterMode(m);
+                  }}
                   style={{
                     padding: "5px 14px",
                     borderRadius: 4,
@@ -268,8 +297,8 @@ export default function App() {
                     fontFamily: "'Chakra Petch', ui-monospace, monospace",
                     border: "none",
                     cursor: "pointer",
-                    background: mode === m ? "#E10600" : "transparent",
-                    color: mode === m ? "#fff" : "#52525b",
+                    background: mode === m && baseline !== null ? "#E10600" : "transparent",
+                    color: mode === m && baseline !== null ? "#fff" : "#52525b",
                     transition: "background 0.15s, color 0.15s",
                     whiteSpace: "nowrap",
                   }}
@@ -294,7 +323,7 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 md:px-8 py-6 space-y-5">
         {/* Empty / explainer state */}
         {!baseline && !loadingBaseline && !baselineWaking && !baselineError && (
-          <Explainer onEnterMode={setMode} />
+          <Explainer onEnterMode={handleEnterMode} />
         )}
 
         {/* Baseline loading */}
@@ -427,6 +456,59 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* ── "Select a race first" toast ──────────────────────────────────── */}
+      {needsRaceToast && (
+        <div
+          onClick={() => {
+            if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+            setNeedsRaceToast(false);
+          }}
+          style={{
+            position: "fixed",
+            bottom: 28,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 200,
+            background: "#17171f",
+            border: "1px solid #3a0a0a",
+            borderLeft: "3px solid #E10600",
+            borderRadius: 4,
+            padding: "10px 20px 10px 14px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            boxShadow: "0 6px 32px rgba(0,0,0,0.7)",
+            cursor: "pointer",
+            animation: "toast-in 0.28s ease-out",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span style={{ color: "#E10600", fontSize: 14, lineHeight: 1 }}>⚑</span>
+          <span
+            style={{
+              fontFamily: "'Chakra Petch', ui-monospace, monospace",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: "#ECE7DA",
+            }}
+          >
+            Select a Grand Prix first
+          </span>
+          <span
+            style={{
+              fontFamily: "'Saira', ui-monospace, monospace",
+              fontSize: 9,
+              color: "#52525b",
+              marginLeft: 4,
+            }}
+          >
+            click to dismiss
+          </span>
+        </div>
+      )}
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="border-t border-zinc-900 px-4 md:px-8 py-4 mt-8">
