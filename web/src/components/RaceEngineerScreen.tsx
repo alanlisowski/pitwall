@@ -1499,28 +1499,27 @@ function TeamRadio({ msg, onDismiss }: { msg: RadioMsg; onDismiss: () => void })
       style={{
         position: "absolute",
         bottom: 170,
-        left: "50%",
+        left: 16,
         zIndex: 45,
         cursor: "pointer",
-        minWidth: 340,
-        maxWidth: 500,
+        width: 290,
         fontFamily: F1_FONT,
-        animation: "radio-slide-in 0.35s cubic-bezier(0.22,1,0.36,1)",
-        filter: "drop-shadow(0 4px 24px rgba(0,0,0,0.7))",
+        animation: "radio-slide-in 0.35s cubic-bezier(0.22,1,0.36,1), radio-fade-out 0.45s 5.05s ease-in forwards",
+        filter: "drop-shadow(0 3px 16px rgba(0,0,0,0.75))",
       }}
     >
       {/* Coloured header bar */}
       <div style={{
         background: msg.teamColour,
-        padding: "5px 14px",
+        padding: "4px 10px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
       }}>
         <span style={{
-          fontSize: 9,
+          fontSize: 8,
           fontWeight: 700,
-          letterSpacing: "0.25em",
+          letterSpacing: "0.22em",
           color: "#000",
           textTransform: "uppercase",
         }}>
@@ -1534,14 +1533,14 @@ function TeamRadio({ msg, onDismiss }: { msg: RadioMsg; onDismiss: () => void })
         background: "#0d0d14",
         border: `1px solid ${msg.teamColour}44`,
         borderTop: "none",
-        padding: "10px 16px 12px",
+        padding: "8px 12px 10px",
       }}>
         <p style={{
-          fontSize: 15,
+          fontSize: 12,
           color: textColour,
           fontFamily: DATA_FONT,
           fontStyle: "italic",
-          lineHeight: 1.45,
+          lineHeight: 1.4,
           margin: 0,
         }}>
           {msg.text}
@@ -2028,30 +2027,33 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const [raceError, setRaceError] = useState<string | null>(null);
   const [trackPoints, setTrackPoints] = useState<number[][]>([]);
   const [pitHudInfo, setPitHudInfo] = useState<PitHudInfo | null>(null);
-  const [radioQueue, setRadioQueue] = useState<RadioMsg[]>([]);
+  const [radioMsg, setRadioMsg] = useState<RadioMsg | null>(null);
 
-  // Stable helper — queues a radio message
-  const addRadio = useCallback((msg: Omit<RadioMsg, "id">) => {
-    const id = Math.random().toString(36).slice(2);
-    setRadioQueue((q) => [...q, { ...msg, id }]);
-  }, []);
+  const dismissRadio = useCallback(() => setRadioMsg(null), []);
 
-  const dismissRadio = useCallback(() => {
-    setRadioQueue((q) => q.slice(1));
-  }, []);
-
-  // Auto-dismiss front of queue after 5.5 s
+  // Auto-dismiss after 5.5 s whenever a new message appears
+  const radioMsgRef = useRef<RadioMsg | null>(null);
+  radioMsgRef.current = radioMsg;
   useEffect(() => {
-    if (radioQueue.length === 0) return;
+    if (!radioMsg) return;
     const t = setTimeout(dismissRadio, 5500);
     return () => clearTimeout(t);
-  // Re-run only when the front message changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [radioQueue[0]?.id]);
+  }, [radioMsg?.id]);
 
-  // Ref so the play-loop closure can call addRadio without a stale capture
-  const addRadioRef = useRef(addRadio);
-  addRadioRef.current = addRadio;
+  // Non-critical radio: 7-lap cooldown enforced here
+  const lastRadioLapRef = useRef(-99);
+
+  // Stable fire-functions — close over stable setter + refs, safe to use in async callbacks
+  const fireCriticalRef = useRef((msg: Omit<RadioMsg, "id">) => {
+    setRadioMsg({ ...msg, id: Math.random().toString(36).slice(2) });
+  });
+  const fireNonCriticalRef = useRef((msg: Omit<RadioMsg, "id">, lap: number) => {
+    if (lap - lastRadioLapRef.current < 7) return;
+    if (radioMsgRef.current !== null) return;
+    lastRadioLapRef.current = lap;
+    setRadioMsg({ ...msg, id: Math.random().toString(36).slice(2) });
+  });
 
   // Refs to avoid stale closures in async callbacks
   const advancingRef = useRef(false);
@@ -2264,47 +2266,50 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
             // Contextual radio triggers
             let posRadioFired = false;
 
+            // Non-critical: position change — 30% chance, respects 7-lap cooldown
             if (prePitCar && playerAfter) {
               const prevPos = prePitCar.position;
               const newPos  = playerAfter.position;
-              if (newPos < prevPos) {
+              if (newPos < prevPos && Math.random() < 0.30) {
                 posRadioFired = true;
-                addRadioRef.current({
+                fireNonCriticalRef.current({
                   speaker: "ENGINEER",
                   text: pick(RADIO.positionGain(newPos)),
                   teamColour,
-                });
-                const egg = maybeEasterEgg(pid);
-                if (egg) setTimeout(() => addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour }), 6000);
-              } else if (newPos > prevPos) {
+                }, state.lap);
+              } else if (newPos > prevPos && Math.random() < 0.30) {
                 posRadioFired = true;
-                addRadioRef.current({ speaker: "ENGINEER", text: pick(RADIO.positionLoss), teamColour });
-                const egg = maybeEasterEgg(pid);
-                if (egg) setTimeout(() => addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour }), 6000);
+                fireNonCriticalRef.current(
+                  { speaker: "ENGINEER", text: pick(RADIO.positionLoss), teamColour },
+                  state.lap,
+                );
               }
             }
 
             for (const ev of state.events) {
               if (ev.kind === EV.TYRE_CLIFF_WARNING) {
-                addRadioRef.current({ speaker: "DRIVER", text: pick(RADIO.tyreCliff), teamColour });
+                // Critical — always fires
+                fireCriticalRef.current({ speaker: "DRIVER", text: pick(RADIO.tyreCliff), teamColour });
                 setPlaying(false);
               } else if (ev.kind === EV.RIVAL_PITTED && ev.driver) {
-                addRadioRef.current({
+                // Non-critical — respects cooldown
+                fireNonCriticalRef.current({
                   speaker: "ENGINEER",
                   text: pick(RADIO.rivalPit(ev.driver)),
                   teamColour,
-                });
+                }, state.lap);
                 setPlaying(false);
               } else if (ev.kind === EV.SAFETY_CAR_DEPLOYED) {
-                addRadioRef.current({ speaker: "ENGINEER", text: pick(RADIO.safetyCar), teamColour });
+                // Critical — always fires
+                fireCriticalRef.current({ speaker: "ENGINEER", text: pick(RADIO.safetyCar), teamColour });
                 setPlaying(false);
               }
             }
 
-            // Rare easter egg on a quiet lap (no other radio fired)
-            if (!posRadioFired && state.events.length === 0 && Math.random() < 0.03) {
+            // Easter egg: ~5% on a quiet lap, respects cooldown
+            if (!posRadioFired && state.events.length === 0 && Math.random() < 0.05) {
               const egg = maybeEasterEgg(pid);
-              if (egg) addRadioRef.current({ speaker: egg.speaker, text: egg.text, teamColour });
+              if (egg) fireNonCriticalRef.current({ speaker: egg.speaker, text: egg.text, teamColour }, state.lap);
             }
           }
         }
@@ -2425,7 +2430,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const handlePitCompound = (c: Compound) => {
     setPendingPit(c);
     pendingPitRef.current = c;
-    addRadio({
+    fireCriticalRef.current({
       speaker: "ENGINEER",
       text: pick(RADIO.pitBoxCall),
       teamColour: teamColours.get(playerId) ?? "#ef4444",
@@ -2509,9 +2514,9 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         />
       )}
 
-      {/* Team radio panel — slides in above the lower-third */}
-      {radioQueue[0] && !pitHudInfo && (
-        <TeamRadio msg={radioQueue[0]} onDismiss={dismissRadio} />
+      {/* Team radio — bottom-left toast, hidden during pit HUD */}
+      {radioMsg && !pitHudInfo && (
+        <TeamRadio msg={radioMsg} onDismiss={dismissRadio} />
       )}
 
       {/* Broadcast pit-stop HUD — overlays the section during a player pit */}
