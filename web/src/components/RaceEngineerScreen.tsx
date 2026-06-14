@@ -1018,6 +1018,357 @@ function DriverLowerThird({
   );
 }
 
+// ─── PitStopHUD ──────────────────────────────────────────────────────────────
+
+type WheelState = "idle" | "fitting" | "done";
+
+const WHEEL_TIMINGS: Array<{
+  id: string;
+  fittingAt?: number;
+  doneAt: number;
+}> = [
+  { id: "FL", doneAt: 350 },
+  { id: "FR", doneAt: 580 },
+  { id: "RL", fittingAt: 920,  doneAt: 1320 },
+  { id: "RR", fittingAt: 1640, doneAt: 2080 },
+];
+
+const CLOCK_SETTLE_MS = 2080;
+const CLOCK_PEAK_S    = 2.45;
+const DISMISS_MS      = 2550;
+
+const RADIO_CALLS = [
+  '"Box, box, box — great stop, boys!"',
+  '"Out lap, push push push. Get those tyres switched on."',
+  '"Clean stop. Now let\'s make the undercut work."',
+  '"Excellent work in the box. Push now, we need the gap."',
+  '"Great tyre change. Car\'s back in the window — go go go!"',
+];
+
+interface PitHudInfo {
+  prevCompound: string;
+  prevAge: number;
+  newCompound: string;
+  positionBefore: number;
+  positionAfter: number;
+  lap: number;
+  teamColour: string;
+  fullName: string;
+  team: string;
+}
+
+function WheelIndicator({ label, state }: { label: string; state: WheelState }) {
+  const isDone    = state === "done";
+  const isFitting = state === "fitting";
+  const accent = isDone ? "#22c55e" : isFitting ? "#f59e0b" : "#3f3f46";
+  const border = isDone ? "#16a34a" : isFitting ? "#d97706" : "#27272a";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+      <span style={{
+        fontSize: 8,
+        letterSpacing: "0.22em",
+        color: isDone ? "#4ade80" : isFitting ? "#fbbf24" : "#3f3f46",
+        textTransform: "uppercase",
+        fontFamily: F1_FONT,
+        transition: "color 0.2s",
+      }}>
+        {label}
+      </span>
+      <div style={{
+        width: 46,
+        height: 46,
+        borderRadius: "50%",
+        border: `2px solid ${border}`,
+        background: state !== "idle" ? `${accent}18` : "#0a0a10",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "border-color 0.25s, background 0.25s, box-shadow 0.25s",
+        boxShadow: isDone ? `0 0 16px ${accent}55` : "none",
+      }}>
+        {isDone ? (
+          <span style={{ fontSize: 20, color: accent, lineHeight: 1, fontWeight: 700 }}>✓</span>
+        ) : isFitting ? (
+          <span style={{ fontSize: 11, color: accent, letterSpacing: "0.05em" }}>···</span>
+        ) : (
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#1e1e28" }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PitStopHUD({ info, onDismiss }: { info: PitHudInfo; onDismiss: () => void }) {
+  const [wheels, setWheels] = useState<Record<string, WheelState>>({
+    FL: "idle", FR: "idle", RL: "idle", RR: "idle",
+  });
+  const [clockMs, setClockMs] = useState(0);
+  const [settled, setSettled] = useState(false);
+  const radioLine = useMemo(
+    () => RADIO_CALLS[Math.floor(Math.random() * RADIO_CALLS.length)],
+    [],
+  );
+
+  // Clock via rAF — animates from 0 to CLOCK_PEAK_S over CLOCK_SETTLE_MS
+  useEffect(() => {
+    const start = performance.now();
+    let raf: number;
+    const tick = () => {
+      const ms = performance.now() - start;
+      if (ms < CLOCK_SETTLE_MS) {
+        setClockMs((ms / CLOCK_SETTLE_MS) * CLOCK_PEAK_S * 1000);
+        raf = requestAnimationFrame(tick);
+      } else {
+        setClockMs(CLOCK_PEAK_S * 1000);
+        setSettled(true);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // Wheel sequence timers
+  useEffect(() => {
+    const ids: ReturnType<typeof setTimeout>[] = [];
+    for (const t of WHEEL_TIMINGS) {
+      if (t.fittingAt !== undefined) {
+        ids.push(
+          setTimeout(() => setWheels((w) => ({ ...w, [t.id]: "fitting" })), t.fittingAt),
+        );
+      }
+      ids.push(
+        setTimeout(() => setWheels((w) => ({ ...w, [t.id]: "done" })), t.doneAt),
+      );
+    }
+    ids.push(setTimeout(onDismiss, DISMISS_MS));
+    return () => ids.forEach(clearTimeout);
+  }, [onDismiss]);
+
+  const prevColor = COMPOUND_COLOR[info.prevCompound] ?? "#52525b";
+  const newColor  = COMPOUND_COLOR[info.newCompound]  ?? "#52525b";
+  const posGain   = info.positionBefore - info.positionAfter; // positive = gained places
+
+  return (
+    <div
+      onClick={onDismiss}
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(4,4,9,0.84)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        cursor: "pointer",
+      }}
+    >
+      {/* HUD card — click anywhere on it also dismisses */}
+      <div
+        onClick={onDismiss}
+        style={{
+          width: 480,
+          maxWidth: "90vw",
+          background: "#17171f",
+          border: `1px solid ${info.teamColour}44`,
+          overflow: "hidden",
+          fontFamily: F1_FONT,
+        }}
+      >
+        {/* Team-colour accent bar */}
+        <div style={{ height: 4, background: info.teamColour }} />
+
+        {/* Driver / team header */}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "12px 20px 10px",
+          background: "#0d0d0f",
+          borderBottom: "1px solid #1e1e28",
+        }}>
+          <div style={{
+            width: 3, alignSelf: "stretch", borderRadius: 2,
+            background: info.teamColour, flexShrink: 0,
+          }} />
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.05em", color: "#ECE7DA", textTransform: "uppercase" }}>
+              {info.fullName}
+            </p>
+            <p style={{ fontSize: 9, letterSpacing: "0.25em", color: "#52525b", textTransform: "uppercase", marginTop: 2 }}>
+              {info.team}
+            </p>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <p style={{ fontSize: 9, letterSpacing: "0.2em", color: "#3f3f46", textTransform: "uppercase" }}>
+              LAP {info.lap}
+            </p>
+            <p style={{ fontSize: 9, letterSpacing: "0.25em", color: info.teamColour, textTransform: "uppercase", marginTop: 2, fontWeight: 700 }}>
+              PIT STOP
+            </p>
+          </div>
+        </div>
+
+        {/* ── Wheel grid + clock ── */}
+        <div style={{ position: "relative", height: 200 }}>
+          {/* Chassis spine — faint rounded pill behind the clock */}
+          <div style={{
+            position: "absolute",
+            left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)",
+            width: 72, height: 162,
+            border: "1px solid #1a1a24",
+            borderRadius: 12,
+            background: "linear-gradient(180deg, #0d0d12 0%, #111118 100%)",
+            pointerEvents: "none",
+          }} />
+
+          {/* FL */}
+          <div style={{ position: "absolute", top: 20, left: 44 }}>
+            <WheelIndicator label="FL" state={wheels.FL} />
+          </div>
+          {/* FR */}
+          <div style={{ position: "absolute", top: 20, right: 44 }}>
+            <WheelIndicator label="FR" state={wheels.FR} />
+          </div>
+          {/* RL */}
+          <div style={{ position: "absolute", bottom: 20, left: 44 }}>
+            <WheelIndicator label="RL" state={wheels.RL} />
+          </div>
+          {/* RR */}
+          <div style={{ position: "absolute", bottom: 20, right: 44 }}>
+            <WheelIndicator label="RR" state={wheels.RR} />
+          </div>
+
+          {/* Clock */}
+          <div style={{
+            position: "absolute",
+            top: "50%", left: "50%",
+            transform: "translate(-50%, -50%)",
+            textAlign: "center",
+            pointerEvents: "none",
+          }}>
+            <div style={{
+              fontSize: 40,
+              fontWeight: 700,
+              color: settled ? "#22c55e" : "#4ade80",
+              letterSpacing: "-0.02em",
+              fontVariantNumeric: "tabular-nums",
+              lineHeight: 1,
+              textShadow: settled ? "0 0 22px #22c55e66" : "0 0 22px #4ade8066",
+              transition: "color 0.4s, text-shadow 0.4s",
+            }}>
+              {(clockMs / 1000).toFixed(2)}
+            </div>
+            <div style={{
+              fontSize: 7,
+              letterSpacing: "0.35em",
+              color: "#3f3f46",
+              textTransform: "uppercase",
+              marginTop: 4,
+            }}>
+              STATIONARY
+            </div>
+          </div>
+        </div>
+
+        <div style={{ height: 1, background: "#1e1e28", margin: "0 20px" }} />
+
+        {/* Tyre swap row + position projection */}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "11px 20px",
+          borderBottom: "1px solid #12121a",
+        }}>
+          {/* Old compound */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{
+              width: 24, height: 24, borderRadius: "50%",
+              background: prevColor,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, fontWeight: 700,
+              color: info.prevCompound === "HARD" ? "#15151c" : "#fff",
+            }}>
+              {COMPOUND_LABEL[info.prevCompound] ?? "?"}
+            </div>
+            <span style={{ fontSize: 10, color: "#6b7280", fontFamily: DATA_FONT }}>
+              {Math.round(info.prevAge)}L
+            </span>
+          </div>
+
+          <span style={{ color: "#27272a", fontSize: 16 }}>→</span>
+
+          {/* New compound */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{
+              width: 24, height: 24, borderRadius: "50%",
+              background: newColor,
+              border: `2px solid ${newColor}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 9, fontWeight: 700,
+              color: info.newCompound === "HARD" ? "#15151c" : "#fff",
+              boxShadow: `0 0 8px ${newColor}44`,
+            }}>
+              {COMPOUND_LABEL[info.newCompound] ?? "?"}
+            </div>
+            <span style={{ fontSize: 10, color: newColor, fontFamily: DATA_FONT, fontWeight: 600, letterSpacing: "0.05em" }}>
+              FRESH
+            </span>
+          </div>
+
+          <div style={{ flex: 1 }} />
+
+          {/* Rejoin position */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: DATA_FONT }}>
+            <span style={{ fontSize: 9, letterSpacing: "0.2em", color: "#52525b", textTransform: "uppercase" }}>
+              REJOIN
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#52525b", fontFamily: F1_FONT }}>
+              P{info.positionBefore}
+            </span>
+            <span style={{ color: "#27272a", fontSize: 14, fontFamily: F1_FONT }}>→</span>
+            <span style={{
+              fontSize: 13, fontWeight: 700, fontFamily: F1_FONT,
+              color: posGain > 0 ? "#22c55e" : posGain < 0 ? "#E10600" : "#ECE7DA",
+            }}>
+              P{info.positionAfter}
+            </span>
+          </div>
+        </div>
+
+        {/* Team radio */}
+        <div style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          padding: "9px 20px 7px",
+          borderBottom: "1px solid #0e0e16",
+        }}>
+          <span style={{ fontSize: 11, color: "#3f3f46", flexShrink: 0, marginTop: 1 }}>🎙</span>
+          <p style={{
+            fontSize: 10,
+            color: "#4a4a5a",
+            fontFamily: DATA_FONT,
+            fontStyle: "italic",
+            lineHeight: 1.5,
+          }}>
+            {radioLine}
+          </p>
+        </div>
+
+        {/* Skip hint */}
+        <div style={{ padding: "5px 0 6px", textAlign: "center" }}>
+          <span style={{ fontSize: 8, letterSpacing: "0.2em", color: "#1a1a24", textTransform: "uppercase" }}>
+            Click to skip →
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Setup phase sub-components ───────────────────────────────────────────────
 
 interface DriverPickerProps {
@@ -1494,16 +1845,20 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const [advancing, setAdvancing] = useState(false);
   const [raceError, setRaceError] = useState<string | null>(null);
   const [trackPoints, setTrackPoints] = useState<number[][]>([]);
+  const [pitHudInfo, setPitHudInfo] = useState<PitHudInfo | null>(null);
 
   // Refs to avoid stale closures in async callbacks
   const advancingRef = useRef(false);
   const sessionIdRef = useRef("");
   const pendingPaceRef = useRef<PaceSetting>("NEUTRAL");
   const pendingPitRef = useRef<Compound | null>(null);
+  const playerIdRef = useRef("");
+  const resumeAfterPitRef = useRef(false);
   advancingRef.current = advancing;
   sessionIdRef.current = sessionId;
   pendingPaceRef.current = pendingPace;
   pendingPitRef.current = pendingPit;
+  playerIdRef.current = selectedDriver ?? "";
 
   // Build driver metadata maps from baseline
   const teamColours = useMemo(() => {
@@ -1656,27 +2011,50 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     setPlaying(true);
   }, []);
 
+  const handlePitHudDismiss = useCallback(() => {
+    setPitHudInfo(null);
+    if (resumeAfterPitRef.current) {
+      resumeAfterPitRef.current = false;
+      setPlaying(true);
+    }
+  }, []);
+
   // Play loop: advance one lap per tick via /step; auto-pause on decision events
   useEffect(() => {
     if (!playing || phase !== "racing") return;
     const delay = speed === 4 ? 220 : 1000;
     const id = setTimeout(async () => {
       if (displayIdx < history.length - 1) {
-        // Replay a cached state (e.g. after skip jumped ahead)
         setDisplayIdx((d) => d + 1);
       } else {
-        const state = await doStep(
-          sessionIdRef.current,
-          pendingPaceRef.current,
-        );
+        const pid = playerIdRef.current;
+        const prePitCar = history[history.length - 1]?.cars.find((c) => c.driver === pid);
+        const state = await doStep(sessionIdRef.current, pendingPaceRef.current);
         if (state) {
           setDisplayIdx((d) => d + 1);
-          if (state.finished) {
+          const playerAfter = state.cars.find((c) => c.driver === pid);
+          if (prePitCar && playerAfter?.pitted_this_lap) {
+            // Player just pitted — show the broadcast HUD, then auto-resume
+            const m = driverMeta.get(pid);
+            setPitHudInfo({
+              prevCompound: prePitCar.compound,
+              prevAge: prePitCar.tyre_age,
+              newCompound: playerAfter.compound,
+              positionBefore: prePitCar.position,
+              positionAfter: playerAfter.position,
+              lap: state.lap,
+              teamColour: teamColours.get(pid) ?? "#ef4444",
+              fullName: m?.fullName ?? pid,
+              team: m?.team ?? "",
+            });
+            resumeAfterPitRef.current = true;
+            setPlaying(false);
+          } else if (state.finished) {
             setPhase("finished");
             setPlaying(false);
           } else if (state.events.some(
-              (e) => e.kind === EV.RIVAL_PITTED || e.kind === EV.TYRE_CLIFF_WARNING,
-            )) {
+            (e) => e.kind === EV.RIVAL_PITTED || e.kind === EV.TYRE_CLIFF_WARNING,
+          )) {
             setPlaying(false);
           }
         }
@@ -1777,6 +2155,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
             setPlaying(false);
             setPendingPit(null);
             setRaceError(null);
+            setPitHudInfo(null);
           }}
         />
       </section>
@@ -1801,7 +2180,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   return (
     <section
       className="flex flex-col rounded overflow-hidden"
-      style={{ background: "#15151c", border: "1px solid #2a2a38", minHeight: 600 }}
+      style={{ background: "#15151c", border: "1px solid #2a2a38", minHeight: 600, position: "relative" }}
     >
       {/* Status strip */}
       <StatusStrip
@@ -1873,6 +2252,11 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           onSkip={skipToNext}
           onSpeedToggle={() => setSpeed((s) => (s === 1 ? 4 : 1))}
         />
+      )}
+
+      {/* Broadcast pit-stop HUD — overlays the section during a player pit */}
+      {pitHudInfo && (
+        <PitStopHUD info={pitHudInfo} onDismiss={handlePitHudDismiss} />
       )}
     </section>
   );
