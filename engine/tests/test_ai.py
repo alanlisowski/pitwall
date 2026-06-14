@@ -320,8 +320,10 @@ class TestAiIntegrationWithSession:
     def _find_first_pit_lap(self, session: RaceSession, driver: str) -> int | None:
         """Drive session to finish, return the first lap `driver` pitted."""
         first_pit: int | None = None
-        # Prime the session: advance to lap-5 event, then pit the player.
-        state = session.advance()
+        # Prime the session: consume RACE_START (lap 1), advance to the PACER pit
+        # event at lap 5, then queue the player's undercut attempt.
+        session.advance()               # lap 1: RACE_START
+        session.advance()               # lap 5: PACER pits
         session.decide(PlayerAction(pit=PitAction("HARD")))
         # Continue driving.
         while True:
@@ -362,8 +364,9 @@ class TestAiIntegrationWithSession:
         """After AI covers on lap 7, it must not pit again at the planned window."""
         session = self._make_undercut_session(AiProfile.hard())
 
-        # Advance to lap-5 event
-        session.advance()
+        # Consume RACE_START (lap 1), then advance to the lap-5 event (PACER pits).
+        session.advance()   # lap 1: RACE_START
+        session.advance()   # lap 5: PACER pits
         session.decide(PlayerAction(pit=PitAction("HARD")))
 
         ai1_pit_laps: list[int] = []

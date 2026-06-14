@@ -383,8 +383,7 @@ def start_race(body: StartRaceRequest) -> StartRaceResponse:
     session_id = uuid.uuid4().hex
     _SESSIONS[session_id] = session
 
-    initial_state = session.advance()
-    return StartRaceResponse(session_id=session_id, state=_race_state_to_schema(initial_state))
+    return StartRaceResponse(session_id=session_id, state=_race_state_to_schema(session.grid_state()))
 
 
 @app.post("/race/{session_id}/advance", response_model=RaceStateSchema)

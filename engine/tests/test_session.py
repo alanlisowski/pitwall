@@ -294,6 +294,8 @@ class TestDecide:
         session = RaceSession(cars=cars, total_laps=_TOTAL_LAPS, player_id=_PLAYER,
                               cfg=SimConfig(sc_prob_per_lap=0.0), seed=42)
 
+        state = session.advance()           # pauses at lap 1: RACE_START
+        assert state.lap == 1
         state = session.advance()           # pauses at lap 8: AI2 pits
         assert state.lap == 8
         session.decide(PlayerAction(pit=PitAction("HARD")))
@@ -399,8 +401,8 @@ def test_matches_simulate_no_pits():
         CarStrategy("A", base_pace=90.3, start_compound="HARD"),
         CarStrategy("B", base_pace=91.0, start_compound="HARD"),
     ]
-    # No pits, HARD compound (cliff at 42, well beyond 15 laps), so no events
-    # until RACE_FINISH — advance() runs all laps in one call.
+    # No pits, HARD compound (cliff at 42, well beyond 15 laps); the only pauses
+    # are RACE_START on lap 1 and RACE_FINISH on the last lap.
     session = RaceSession(cars=cars, total_laps=total_laps, player_id="P", cfg=cfg, seed=0)
     session_state = _drive_to_finish(session)
     session_times = {c.driver: c.total_time for c in session_state.cars}

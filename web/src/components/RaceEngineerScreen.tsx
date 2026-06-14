@@ -481,11 +481,9 @@ function TrackMap({
     return (
       <div
         style={{
-          width: 300,
-          height: 220,
+          width: "100%",
+          height: "100%",
           background: "#1d1d26",
-          border: "1px solid #2a2a38",
-          borderRadius: 4,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -529,12 +527,12 @@ function TrackMap({
   return (
     <div
       style={{
-        width: 300,
+        width: "100%",
+        height: "100%",
         background: "#1d1d26",
-        border: "1px solid #2a2a38",
-        borderRadius: 4,
         overflow: "hidden",
-        flexShrink: 0,
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       {/* Card header with sector legend */}
@@ -546,6 +544,7 @@ function TrackMap({
           padding: "4px 10px",
           borderBottom: "1px solid #2a2a38",
           fontFamily: F1_FONT,
+          flexShrink: 0,
         }}
       >
         <span
@@ -565,10 +564,11 @@ function TrackMap({
         </div>
       </div>
 
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
       <svg
         viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", display: "block", height: 200 }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       >
         {/* Track border — dark halo so sector colours pop */}
         <path
@@ -638,6 +638,7 @@ function TrackMap({
           );
         })}
       </svg>
+      </div>
     </div>
   );
 }
@@ -650,6 +651,7 @@ function RaceControlBanner({
   pendingPit,
   onPitCompound,
   onCancelPit,
+  onStayOut,
   cars,
 }: {
   scActive: boolean;
@@ -657,6 +659,7 @@ function RaceControlBanner({
   pendingPit: Compound | null;
   onPitCompound: (c: Compound) => void;
   onCancelPit: () => void;
+  onStayOut: () => void;
   cars: RaceStateSchema["cars"];
 }) {
   const [showCompoundPicker, setShowCompoundPicker] = useState(false);
@@ -797,14 +800,15 @@ function RaceControlBanner({
             >
               BOX NOW ▼
             </button>
-            <span
-              className="px-4 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase text-zinc-600 border border-zinc-800"
+            <button
+              onClick={onStayOut}
+              className="px-4 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase text-zinc-400 border border-zinc-700 hover:border-zinc-500 hover:text-zinc-200 transition-all"
               style={{
                 clipPath: "polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%)",
               }}
             >
               STAY OUT
-            </span>
+            </button>
           </>
         )}
       </div>
@@ -1315,6 +1319,20 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     }
   }, [doAdvance]);
 
+  // STAY OUT: advance without pitting, then resume the play loop if no new events
+  const handleStayOut = useCallback(async () => {
+    const state = await doAdvance(sessionIdRef.current, pendingPaceRef.current);
+    if (state) {
+      setDisplayIdx((d) => d + 1);
+      if (state.finished) {
+        setPhase("finished");
+        setPlaying(false);
+      } else if (state.events.length === 0) {
+        setPlaying(true);
+      }
+    }
+  }, [doAdvance]);
+
   // Animation loop
   useEffect(() => {
     if (!playing || phase !== "racing") return;
@@ -1454,8 +1472,8 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         onExit={onBack}
       />
 
-      {/* Main content: timing tower + race area (track map sits as compact card) */}
-      <div className="flex flex-1 overflow-hidden" style={{ minHeight: 380 }}>
+      {/* Main content: timing tower left, large track map centre */}
+      <div className="flex flex-1 overflow-hidden" style={{ minHeight: 420 }}>
         <TimingTower
           cars={currentState.cars}
           playerId={playerId}
@@ -1463,8 +1481,8 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           prevState={prevState}
           flDriver={fastestLap?.driver ?? null}
         />
-        <div className="flex-1 relative overflow-hidden" style={{ background: "#15151c" }}>
-          <div style={{ position: "absolute", top: 12, right: 12, zIndex: 10 }}>
+        <div className="flex-1 relative overflow-hidden" style={{ background: "#1d1d26" }}>
+          <div style={{ position: "absolute", inset: 0 }}>
             <TrackMap
               cars={currentState.cars}
               trackPoints={trackPoints}
@@ -1486,6 +1504,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           setPendingPit(null);
           pendingPitRef.current = null;
         }}
+        onStayOut={handleStayOut}
         cars={currentState.cars}
       />
 

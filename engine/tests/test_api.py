@@ -309,13 +309,17 @@ def test_start_race_returns_session_id_and_initial_state(client):
 
     state = data["state"]
     assert state["total_laps"] == 5
-    assert state["lap"] >= 1
+    assert state["lap"] == 0             # pre-race grid, no laps run yet
     assert len(state["cars"]) == 2
     positions = sorted(c["position"] for c in state["cars"])
     assert positions == [1, 2]
-    assert isinstance(state["finished"], bool)
-    assert isinstance(state["sc_active"], bool)
-    assert isinstance(state["events"], list)
+    assert state["finished"] is False
+    assert state["sc_active"] is False
+    assert state["events"] == []
+    # Grid-state invariants: tyre_age 0, no gap, nobody pitted, lap times absent
+    assert all(c["tyre_age"] == 0.0 for c in state["cars"])
+    assert all(c["gap_to_leader"] == 0.0 for c in state["cars"])
+    assert all(c["pitted_this_lap"] is False for c in state["cars"])
 
 
 def test_start_race_unknown_race_returns_404(client):
@@ -428,13 +432,21 @@ def test_advance_with_pace_setting_accepted(client):
 
 
 def test_advance_cars_expose_current_lap_time(client):
-    """Each CarState must carry a positive current_lap_time after the first advance."""
+    """Each CarState must carry a positive current_lap_time after the first advance.
+
+    /start returns lap 0 (grid state) where current_lap_time is 0; the first
+    advance (lap 1, RACE_START) is where lap times first appear.
+    """
     start = client.post("/race/start", json={
         "race_id": _RACE_ID,
         "driver_id": "DRB",
         "seed": 3,
     }).json()
-    state = start["state"]
+    session_id = start["session_id"]
+
+    r = client.post(f"/race/{session_id}/advance", json={})
+    assert r.status_code == 200
+    state = r.json()
     for car in state["cars"]:
         assert "current_lap_time" in car
         assert car["current_lap_time"] > 0.0

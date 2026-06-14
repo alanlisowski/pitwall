@@ -31,6 +31,7 @@ from .strategy import CarStrategy
 
 class EventKind(Enum):
     """Events that trigger a decision-point pause in advance()."""
+    RACE_START = "race_start"
     RIVAL_PITTED = "rival_pitted"
     TYRE_CLIFF_WARNING = "tyre_cliff_warning"
     RACE_FINISH = "race_finish"
@@ -171,6 +172,35 @@ class RaceSession:
     # Public API                                                               #
     # ---------------------------------------------------------------------- #
 
+    def grid_state(self) -> RaceState:
+        """Return the pre-race grid (lap 0) in starting-grid order.
+
+        Every car is on its starting compound, tyre_age 0, gap 0, no pit taken.
+        Call this once immediately after construction; do not call advance() first.
+        """
+        car_states = [
+            CarState(
+                driver=d,
+                position=pos,
+                gap_to_leader=0.0,
+                compound=self._cars[d].compound,
+                tyre_age=0.0,
+                total_time=0.0,
+                pace_setting=self._cars[d].pace_setting,
+                pitted_this_lap=False,
+                current_lap_time=0.0,
+            )
+            for pos, d in enumerate(self._driver_order, 1)
+        ]
+        return RaceState(
+            lap=0,
+            total_laps=self._total_laps,
+            cars=car_states,
+            events=[],
+            finished=False,
+            sc_active=False,
+        )
+
     def advance(self) -> RaceState:
         """Run laps until the next decision point or the race ends.
 
@@ -301,6 +331,10 @@ class RaceSession:
             self._compress_field()
 
         events: list[SessionEvent] = []
+
+        # Opening lap checkpoint — always pause so the front-end can show lap 1.
+        if lap == 1:
+            events.append(SessionEvent(lap=1, kind=EventKind.RACE_START, driver=""))
 
         # Safety car events — both are decision points.
         for window in self._sc_schedule:
