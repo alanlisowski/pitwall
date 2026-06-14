@@ -386,6 +386,30 @@ def start_race(body: StartRaceRequest) -> StartRaceResponse:
     return StartRaceResponse(session_id=session_id, state=_race_state_to_schema(session.grid_state()))
 
 
+@app.post("/race/{session_id}/step", response_model=RaceStateSchema)
+def step_race(session_id: str, body: AdvanceRequest) -> RaceStateSchema:
+    """Apply the player's decision and advance exactly one lap.
+
+    Unlike /advance, this never loops to the next decision point.
+    Calling this on an already-finished session is safe and returns the
+    terminal state unchanged.
+    """
+    session = _SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found.")
+
+    action = PlayerAction(
+        pit=PitAction(compound=body.pit_compound) if body.pit_compound else None,
+        pace=PaceSetting(body.pace),
+    )
+    try:
+        session.decide(action)
+    except RuntimeError:
+        pass
+
+    return _race_state_to_schema(session.step_lap())
+
+
 @app.post("/race/{session_id}/advance", response_model=RaceStateSchema)
 def advance_race(session_id: str, body: AdvanceRequest) -> RaceStateSchema:
     """Apply the player's decision and advance to the next decision point.

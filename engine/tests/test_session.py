@@ -416,6 +416,68 @@ def test_matches_simulate_no_pits():
     assert session_order == sim_result.finishing_order
 
 
+# --------------------------------------------------------------------------- #
+# 6. step_lap()                                                                 #
+# --------------------------------------------------------------------------- #
+
+class TestStepLap:
+    def test_step_lap_returns_lap_1_no_pit_events(self):
+        """From the grid, step_lap() returns lap 1 with no rival-pit events.
+
+        HUL's stop is on lap 2, so it must not appear on the FIRST step_lap.
+        """
+        cars = [
+            CarStrategy(_PLAYER, base_pace=90.0, start_compound="MEDIUM"),
+            CarStrategy("HUL", base_pace=90.5, start_compound="MEDIUM",
+                        pit_stops=[PitStop(lap=2, compound="HARD")]),
+        ]
+        session = RaceSession(
+            cars=cars, total_laps=10, player_id=_PLAYER,
+            cfg=SimConfig(sc_prob_per_lap=0.0), seed=0,
+        )
+        state = session.step_lap()
+        assert state.lap == 1
+        pit_events = [e for e in state.events if e.kind == EventKind.RIVAL_PITTED]
+        assert pit_events == [], "HUL's lap-2 stop must not appear on lap 1"
+
+    def test_step_lap_shows_rival_pit_on_lap_2(self):
+        """The second step_lap() returns lap 2 carrying HUL's RIVAL_PITTED event."""
+        cars = [
+            CarStrategy(_PLAYER, base_pace=90.0, start_compound="MEDIUM"),
+            CarStrategy("HUL", base_pace=90.5, start_compound="MEDIUM",
+                        pit_stops=[PitStop(lap=2, compound="HARD")]),
+        ]
+        session = RaceSession(
+            cars=cars, total_laps=10, player_id=_PLAYER,
+            cfg=SimConfig(sc_prob_per_lap=0.0), seed=0,
+        )
+        session.step_lap()  # lap 1 — no pit events
+        state = session.step_lap()  # lap 2 — HUL pits
+        assert state.lap == 2
+        pit_events = [
+            e for e in state.events
+            if e.kind == EventKind.RIVAL_PITTED and e.driver == "HUL"
+        ]
+        assert len(pit_events) == 1
+
+    def test_step_lap_after_finish_returns_terminal_state(self):
+        """step_lap() on a finished session is a no-op that returns the terminal state."""
+        cars = [
+            CarStrategy(_PLAYER, base_pace=90.0, start_compound="HARD"),
+            CarStrategy("AI1", base_pace=91.0, start_compound="HARD"),
+        ]
+        session = RaceSession(
+            cars=cars, total_laps=5, player_id=_PLAYER,
+            cfg=SimConfig(sc_prob_per_lap=0.0), seed=0,
+        )
+        for _ in range(5):
+            state = session.step_lap()
+        assert state.finished
+        again = session.step_lap()
+        assert again.lap == 5
+        assert again.finished
+
+
 def test_invalid_player_id_raises():
     cars = [CarStrategy("VER", base_pace=90.0, start_compound="MEDIUM")]
     with pytest.raises(ValueError, match="player_id"):

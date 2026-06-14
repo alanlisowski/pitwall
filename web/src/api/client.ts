@@ -61,6 +61,13 @@ export function startRace(body: StartRaceRequest): Promise<StartRaceResponse> {
   return post<StartRaceResponse>("/race/start", body);
 }
 
+export function stepRace(
+  sessionId: string,
+  body: AdvanceRequest,
+): Promise<RaceStateSchema> {
+  return post<RaceStateSchema>(`/race/${sessionId}/step`, body);
+}
+
 export function advanceRace(
   sessionId: string,
   body: AdvanceRequest,

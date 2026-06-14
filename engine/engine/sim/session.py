@@ -201,6 +201,22 @@ class RaceSession:
             sc_active=False,
         )
 
+    def step_lap(self) -> RaceState:
+        """Advance exactly one lap and return that lap's RaceState.
+
+        Unlike advance(), never loops to the next decision point — always
+        stops after a single lap regardless of what events occurred.
+        Calling step_lap() on an already-finished session returns the terminal
+        state unchanged.
+        """
+        if self._finished:
+            return self._build_state(self._current_lap, [])
+
+        lap = self._current_lap + 1
+        lap_events = self._step_lap(lap)
+        self._current_lap = lap
+        return self._build_state(lap, lap_events)
+
     def advance(self) -> RaceState:
         """Run laps until the next decision point or the race ends.
 

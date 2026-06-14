@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { advanceRace, fetchTrack, startRace } from "../api/client";
+import { advanceRace, fetchTrack, startRace, stepRace } from "../api/client";
 import type {
   BaselineResponse,
   CarStateSchema,
@@ -29,6 +29,7 @@ const F1_FONT = "'Chakra Petch', ui-monospace, monospace";
 const DATA_FONT = "'Saira', ui-monospace, monospace";
 
 const EV = {
+  RACE_START: "race_start",
   RIVAL_PITTED: "rival_pitted",
   TYRE_CLIFF_WARNING: "tyre_cliff_warning",
   SAFETY_CAR_DEPLOYED: "safety_car_deployed",
@@ -670,7 +671,10 @@ function RaceControlBanner({
 
   const isSc = scActive;
   const relevantEvents = events.filter(
-    (e) => e.kind !== EV.SAFETY_CAR_CLEARED && e.kind !== EV.RACE_FINISH,
+    (e) =>
+      e.kind !== EV.SAFETY_CAR_CLEARED &&
+      e.kind !== EV.RACE_FINISH &&
+      e.kind !== EV.RACE_START,
   );
   const topEvent = relevantEvents[0] ?? null;
   const isTyreWarn = topEvent?.kind === EV.TYRE_CLIFF_WARNING;
@@ -1169,9 +1173,302 @@ function FinishedScreen({
   );
 }
 
+// ─── LightsOut ────────────────────────────────────────────────────────────────
+
+function LightsGridRow({
+  car,
+  playerId,
+  teamColours,
+}: {
+  car: RaceStateSchema["cars"][number];
+  playerId: string;
+  teamColours: Map<string, string>;
+}) {
+  const colour = teamColours.get(car.driver) ?? "#52525b";
+  const isPlayer = car.driver === playerId;
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1.5"
+      style={{
+        background: isPlayer ? "#252530" : "#1a1a24",
+        border: isPlayer ? "1px solid #3f3f46" : "1px solid transparent",
+        fontFamily: F1_FONT,
+      }}
+    >
+      <span
+        style={{ fontSize: 9, color: "#52525b", width: 16, textAlign: "right", flexShrink: 0 }}
+      >
+        P{car.position}
+      </span>
+      <div
+        style={{ width: 3, height: 20, background: colour, flexShrink: 0, borderRadius: 1 }}
+      />
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.08em",
+          color: isPlayer ? "#fff" : "#ECE7DA",
+          flexShrink: 0,
+        }}
+      >
+        {car.driver}
+      </span>
+      <div className="ml-auto shrink-0">
+        <TyreChip compound={car.compound} age={0} />
+      </div>
+    </div>
+  );
+}
+
+function LightsOut({
+  gridState,
+  playerId,
+  teamColours,
+  onComplete,
+  raceName,
+}: {
+  gridState: RaceStateSchema;
+  playerId: string;
+  teamColours: Map<string, string>;
+  onComplete: () => void;
+  raceName: string;
+}) {
+  const [lit, setLit] = useState(0);
+  const [out, setOut] = useState(false);
+  const [skipped, setSkipped] = useState(false);
+  const firedRef = useRef(false);
+
+  // Illuminate lights one by one, ~1.1 s apart
+  useEffect(() => {
+    if (skipped) return;
+    const timers = [1, 2, 3, 4, 5].map((n) =>
+      setTimeout(() => setLit(n), n * 1100),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [skipped]);
+
+  // When all 5 are lit → go dark after a brief hold, then hand off to racing phase
+  useEffect(() => {
+    if (lit < 5 || firedRef.current) return;
+    firedRef.current = true;
+    const holdMs = skipped ? 0 : 350;
+    const id = setTimeout(() => {
+      setOut(true);
+      setTimeout(onComplete, 620);
+    }, holdMs);
+    return () => clearTimeout(id);
+  }, [lit, skipped, onComplete]);
+
+  const handleClick = useCallback(() => {
+    if (out) return;
+    setSkipped(true);
+    setLit(5);
+  }, [out]);
+
+  const sorted = useMemo(
+    () => [...gridState.cars].sort((a, b) => a.position - b.position),
+    [gridState.cars],
+  );
+  const leftCol = sorted.filter((_, i) => i % 2 === 0);
+  const rightCol = sorted.filter((_, i) => i % 2 === 1);
+
+  return (
+    <section
+      className="flex flex-col rounded overflow-hidden"
+      style={{
+        background: "#15151c",
+        border: "1px solid #2a2a38",
+        minHeight: 600,
+        cursor: out ? "default" : "pointer",
+        userSelect: "none",
+      }}
+      onClick={handleClick}
+    >
+      {/* Header — mirrors StatusStrip styling */}
+      <div className="shrink-0">
+        <div
+          className="flex items-center px-4 py-2 gap-4"
+          style={{ background: "#1d1d26", fontFamily: F1_FONT }}
+        >
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-[3px]">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  style={{ width: 5, height: 20, background: "#E10600", transform: "skewX(-14deg)" }}
+                />
+              ))}
+            </div>
+            <span style={{ fontStyle: "italic", fontWeight: 700, fontSize: 18, letterSpacing: "0.04em" }}>
+              <span style={{ color: "#fff" }}>PIT</span>
+              <span style={{ color: "#E10600" }}>WALL</span>
+            </span>
+          </div>
+          <div className="flex-1" />
+          <span style={{ fontSize: 10, color: "#52525b", letterSpacing: "0.2em", textTransform: "uppercase" }}>
+            {raceName}
+          </span>
+          <span
+            style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.25em", color: "#3f3f46" }}
+          >
+            FORMATION LAP
+          </span>
+        </div>
+        <div
+          style={{
+            height: 3,
+            background:
+              "repeating-linear-gradient(135deg, #E10600 0px, #E10600 8px, #ffffff 8px, #ffffff 16px)",
+          }}
+        />
+      </div>
+
+      {/* Gantry */}
+      <div
+        className="w-full flex flex-col items-center py-10 shrink-0"
+        style={{ background: "#1d1d26", borderBottom: "1px solid #2a2a38" }}
+      >
+        {/* Five-light panel */}
+        <div
+          className="flex items-center justify-center gap-5 px-10 py-6 rounded-sm"
+          style={{
+            background: "#252530",
+            border: "2px solid #3f3f46",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.8)",
+          }}
+        >
+          {[1, 2, 3, 4, 5].map((n) => {
+            const isLit = lit >= n && !out;
+            return (
+              <div
+                key={n}
+                style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 6,
+                  background: isLit ? "#E10600" : "#111118",
+                  border: `2px solid ${isLit ? "#ff5a58" : "#27272a"}`,
+                  boxShadow: isLit
+                    ? "0 0 20px #E10600, 0 0 44px rgba(225,6,0,0.55), inset 0 1px 0 rgba(255,160,160,0.3)"
+                    : "inset 0 1px 0 rgba(255,255,255,0.03)",
+                  transition: "all 0.15s ease",
+                }}
+              />
+            );
+          })}
+        </div>
+
+        {/* Status line beneath the gantry */}
+        <div
+          style={{
+            height: 40,
+            marginTop: 18,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {out ? (
+            <p
+              style={{
+                fontFamily: F1_FONT,
+                fontStyle: "italic",
+                fontWeight: 700,
+                fontSize: 16,
+                letterSpacing: "0.15em",
+                color: "#ECE7DA",
+                textTransform: "uppercase",
+                animation: "pitwall-lights-out 0.45s ease forwards",
+              }}
+            >
+              LIGHTS OUT — AND AWAY WE GO
+            </p>
+          ) : (
+            /* Small indicator dots mirroring the five lights */
+            <div className="flex gap-2.5 items-center">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <div
+                  key={n}
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    background: lit >= n ? "#E10600" : "#27272a",
+                    boxShadow: lit >= n ? "0 0 6px #E10600" : "none",
+                    transition: "all 0.15s ease",
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Starting grid — two-column, P1/P3/P5 left, P2/P4/P6 right */}
+      <div className="flex-1 overflow-y-auto px-4 py-4">
+        <p
+          style={{
+            fontFamily: F1_FONT,
+            fontSize: 9,
+            textTransform: "uppercase",
+            letterSpacing: "0.25em",
+            color: "#4a4a5a",
+            marginBottom: 12,
+          }}
+        >
+          Starting Grid · {gridState.total_laps} Laps
+        </p>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <div className="flex flex-col gap-1.5">
+            {leftCol.map((car) => (
+              <LightsGridRow
+                key={car.driver}
+                car={car}
+                playerId={playerId}
+                teamColours={teamColours}
+              />
+            ))}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {rightCol.map((car) => (
+              <LightsGridRow
+                key={car.driver}
+                car={car}
+                playerId={playerId}
+                teamColours={teamColours}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom bar */}
+      <div
+        className="shrink-0 flex items-center justify-center py-2.5"
+        style={{ background: "#0d0d0f", borderTop: "1px solid #1a1a24" }}
+      >
+        {!out && (
+          <span
+            style={{
+              fontFamily: F1_FONT,
+              fontSize: 9,
+              color: "#27272a",
+              letterSpacing: "0.2em",
+              textTransform: "uppercase",
+            }}
+          >
+            Click anywhere to skip →
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── RaceEngineerScreen ───────────────────────────────────────────────────────
 
-type Phase = "setup" | "racing" | "finished";
+type Phase = "setup" | "lights" | "racing" | "finished";
 type Speed = 1 | 4;
 
 interface Props {
@@ -1265,7 +1562,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         setSessionId(resp.session_id);
         setHistory([resp.state]);
         setDisplayIdx(0);
-        setPhase("racing");
+        setPhase("lights");
         setStarting(false);
         setStartWaking(false);
         return;
@@ -1283,6 +1580,32 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     setStarting(false);
     setStartWaking(false);
   };
+
+  const doStep = useCallback(
+    async (sid: string, pace: PaceSetting): Promise<RaceStateSchema | null> => {
+      if (advancingRef.current) return null;
+      advancingRef.current = true;
+      setAdvancing(true);
+      try {
+        const state = await stepRace(sid, {
+          pace,
+          pit_compound: pendingPitRef.current ?? undefined,
+        });
+        setPendingPit(null);
+        pendingPitRef.current = null;
+        setHistory((prev) => [...prev, state]);
+        return state;
+      } catch (err) {
+        setRaceError((err as Error).message);
+        setPlaying(false);
+        return null;
+      } finally {
+        advancingRef.current = false;
+        setAdvancing(false);
+      }
+    },
+    [],
+  );
 
   const doAdvance = useCallback(
     async (sid: string, pace: PaceSetting): Promise<RaceStateSchema | null> => {
@@ -1310,6 +1633,13 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     [],
   );
 
+  // Called by LightsOut when the animation completes.
+  // history[0] is the grid (lap 0); the play loop will step to lap 1 on first tick.
+  const handleLightsComplete = useCallback(() => {
+    setDisplayIdx(0);
+    setPhase("racing");
+  }, []);
+
   const skipToNext = useCallback(async () => {
     setPlaying(false);
     const state = await doAdvance(sessionIdRef.current, pendingPaceRef.current);
@@ -1319,29 +1649,23 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
     }
   }, [doAdvance]);
 
-  // STAY OUT: advance without pitting, then resume the play loop if no new events
-  const handleStayOut = useCallback(async () => {
-    const state = await doAdvance(sessionIdRef.current, pendingPaceRef.current);
-    if (state) {
-      setDisplayIdx((d) => d + 1);
-      if (state.finished) {
-        setPhase("finished");
-        setPlaying(false);
-      } else if (state.events.length === 0) {
-        setPlaying(true);
-      }
-    }
-  }, [doAdvance]);
+  // STAY OUT: dismiss any pending pit decision and resume the step-by-step play loop
+  const handleStayOut = useCallback(() => {
+    setPendingPit(null);
+    pendingPitRef.current = null;
+    setPlaying(true);
+  }, []);
 
-  // Animation loop
+  // Play loop: advance one lap per tick via /step; auto-pause on decision events
   useEffect(() => {
     if (!playing || phase !== "racing") return;
-    const delay = speed === 4 ? 220 : 900;
+    const delay = speed === 4 ? 220 : 1000;
     const id = setTimeout(async () => {
       if (displayIdx < history.length - 1) {
+        // Replay a cached state (e.g. after skip jumped ahead)
         setDisplayIdx((d) => d + 1);
       } else {
-        const state = await doAdvance(
+        const state = await doStep(
           sessionIdRef.current,
           pendingPaceRef.current,
         );
@@ -1350,14 +1674,17 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           if (state.finished) {
             setPhase("finished");
             setPlaying(false);
-          } else if (state.events.length > 0) {
+          } else if (state.events.some(
+              (e) => e.kind === EV.RIVAL_PITTED || e.kind === EV.TYRE_CLIFF_WARNING,
+            )) {
             setPlaying(false);
           }
         }
       }
     }, delay);
     return () => clearTimeout(id);
-  }, [playing, phase, speed, displayIdx, history.length, doAdvance]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, phase, speed, displayIdx, history.length, doStep]);
 
   // ── Setup phase ─────────────────────────────────────────────────────────────
 
@@ -1405,6 +1732,20 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           onStart={handleStart}
         />
       </section>
+    );
+  }
+
+  // ── Lights phase ─────────────────────────────────────────────────────────────
+
+  if (phase === "lights" && history[0]) {
+    return (
+      <LightsOut
+        gridState={history[0]}
+        playerId={selectedDriver ?? ""}
+        teamColours={teamColours}
+        onComplete={handleLightsComplete}
+        raceName={baseline.race.gp_name}
+      />
     );
   }
 
