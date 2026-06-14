@@ -24,7 +24,7 @@ export function Spinner() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [mode, setMode] = useState<"strategy" | "race">("strategy");
+  const [mode, setMode] = useState<"strategy" | "race">("race");
 
   const [races, setRaces] = useState<RaceSummary[]>([]);
   const [racesLoading, setRacesLoading] = useState(true);
@@ -237,38 +237,46 @@ export default function App() {
               <RacePicker
                 races={races}
                 selectedId={selectedId}
-                onSelect={(id) => {
-                  setSelectedId(id);
-                  setMode("strategy");
-                }}
+                onSelect={(id) => setSelectedId(id)}
               />
             )}
           </div>
 
           {baseline && (
-            <div className="shrink-0 flex gap-1">
-              <button
-                onClick={() => setMode("strategy")}
-                className={[
-                  "px-3 py-1 rounded text-[10px] font-bold uppercase tracking-widest transition-all border",
-                  mode === "strategy"
-                    ? "bg-zinc-700 border-zinc-600 text-zinc-200"
-                    : "bg-transparent border-zinc-800 text-zinc-600 hover:border-zinc-600 hover:text-zinc-400",
-                ].join(" ")}
-              >
-                Strategy
-              </button>
-              <button
-                onClick={() => setMode("race")}
-                className={[
-                  "px-3 py-1 rounded text-[10px] font-bold uppercase tracking-widest transition-all border",
-                  mode === "race"
-                    ? "bg-red-700 border-red-600 text-white"
-                    : "bg-transparent border-zinc-800 text-zinc-600 hover:border-red-900 hover:text-red-400",
-                ].join(" ")}
-              >
-                Race
-              </button>
+            <div
+              className="shrink-0"
+              style={{
+                display: "flex",
+                background: "#12121a",
+                border: "1px solid #2a2a38",
+                borderRadius: 6,
+                padding: 3,
+                gap: 2,
+              }}
+            >
+              {(["race", "strategy"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  style={{
+                    padding: "5px 14px",
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    fontFamily: "'Chakra Petch', ui-monospace, monospace",
+                    border: "none",
+                    cursor: "pointer",
+                    background: mode === m ? "#E10600" : "transparent",
+                    color: mode === m ? "#fff" : "#52525b",
+                    transition: "background 0.15s, color 0.15s",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {m === "race" ? "🏁 Race" : "⚙ Strategy"}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -285,7 +293,9 @@ export default function App() {
       {/* ── Main content ──────────────────────────────────────────────────── */}
       <main className="max-w-7xl mx-auto px-4 md:px-8 py-6 space-y-5">
         {/* Empty / explainer state */}
-        {!baseline && !loadingBaseline && !baselineWaking && !baselineError && <Explainer />}
+        {!baseline && !loadingBaseline && !baselineWaking && !baselineError && (
+          <Explainer onEnterMode={setMode} />
+        )}
 
         {/* Baseline loading */}
         {loadingBaseline && (
