@@ -53,11 +53,26 @@ export interface RaceResultSchema {
   total_times: Record<string, number>;
 }
 
+export interface DriverSchema {
+  driver_code: string;
+  full_name: string;
+  team: string;
+  team_colour: string;
+  grid_position: number;
+  finishing_position: number;
+}
+
+export interface TrackResponse {
+  race_id: number;
+  points: number[][];
+}
+
 export interface BaselineResponse {
   race: RaceSummary;
   config: SimConfigSchema;
   strategies: CarStrategySchema[];
   result: RaceResultSchema;
+  drivers: DriverSchema[];
 }
 
 export interface SimulateRequest {
@@ -111,6 +126,7 @@ export interface CarStateSchema {
   total_time: number;
   pace_setting: PaceSetting;
   pitted_this_lap: boolean;
+  current_lap_time: number;
 }
 
 export interface SessionEventSchema {

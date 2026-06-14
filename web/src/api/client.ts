@@ -9,6 +9,7 @@ import type {
   SimulateRequest,
   StartRaceRequest,
   StartRaceResponse,
+  TrackResponse,
 } from "./types";
 
 const BASE: string =
@@ -42,6 +43,10 @@ export function fetchRaces(): Promise<RaceSummary[]> {
 
 export function fetchBaseline(raceId: number): Promise<BaselineResponse> {
   return get<BaselineResponse>(`/races/${raceId}/baseline`);
+}
+
+export function fetchTrack(raceId: number): Promise<TrackResponse> {
+  return get<TrackResponse>(`/races/${raceId}/track`);
 }
 
 export function simulate(body: SimulateRequest): Promise<RaceResultSchema> {
