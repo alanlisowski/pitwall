@@ -171,17 +171,43 @@ export default function App() {
     JSON.stringify(editedStrategies) !== JSON.stringify(baseline.strategies);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-mono">
+    <div className="min-h-screen text-[#ECE7DA]" style={{ backgroundColor: "#15151c", fontFamily: "'Saira', ui-monospace, monospace" }}>
       {/* ── Sticky header ─────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur border-b border-zinc-800 px-4 md:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-6">
-          <div className="shrink-0">
-            <h1 className="text-base font-bold tracking-[0.35em] text-zinc-100">
-              PITWALL
-            </h1>
-            <p className="text-[9px] text-zinc-600 tracking-[0.25em] uppercase leading-none mt-0.5">
-              F1 Race Strategy Simulator
-            </p>
+      <header className="sticky top-0 z-30 backdrop-blur" style={{ backgroundColor: "#1d1d26dd", borderBottom: "none" }}>
+        <div className="max-w-7xl mx-auto px-4 md:px-8 py-2.5 flex items-center justify-between gap-6">
+          <div className="shrink-0 flex items-center gap-2">
+            {/* Speed bars */}
+            <div className="flex items-center gap-[3px]">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 5,
+                    height: 20,
+                    background: "#E10600",
+                    transform: "skewX(-14deg)",
+                  }}
+                />
+              ))}
+            </div>
+            <div>
+              <h1
+                style={{
+                  fontFamily: "'Chakra Petch', ui-monospace, monospace",
+                  fontStyle: "italic",
+                  fontWeight: 700,
+                  fontSize: 18,
+                  letterSpacing: "0.04em",
+                  lineHeight: 1,
+                }}
+              >
+                <span style={{ color: "#fff" }}>PIT</span>
+                <span style={{ color: "#E10600" }}>WALL</span>
+              </h1>
+              <p style={{ fontSize: 9, color: "#6b7280", letterSpacing: "0.25em", textTransform: "uppercase", marginTop: 2 }}>
+                F1 Race Strategy Simulator
+              </p>
+            </div>
           </div>
           <div className="flex-1 min-w-0">
             {racesLoading ? (
@@ -246,6 +272,14 @@ export default function App() {
             </div>
           )}
         </div>
+        {/* Kerb stripe */}
+        <div
+          style={{
+            height: 3,
+            background:
+              "repeating-linear-gradient(135deg, #E10600 0px, #E10600 8px, #ffffff 8px, #ffffff 16px)",
+          }}
+        />
       </header>
 
       {/* ── Main content ──────────────────────────────────────────────────── */}

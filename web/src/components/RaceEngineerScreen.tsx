@@ -13,9 +13,9 @@ import type {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const COMPOUND_COLOR: Record<string, string> = {
-  SOFT: "#ef4444",
-  MEDIUM: "#eab308",
-  HARD: "#f4f4f5",
+  SOFT: "#E10600",
+  MEDIUM: "#EFC027",
+  HARD: "#F0F0F0",
 };
 const COMPOUND_LABEL: Record<string, string> = { SOFT: "S", MEDIUM: "M", HARD: "H" };
 const MAX_TYRE_AGE: Record<string, number> = { SOFT: 22, MEDIUM: 35, HARD: 55 };
@@ -25,7 +25,8 @@ const PACE_OPTIONS: PaceSetting[] = [
 const PACE_ABBREV: Record<PaceSetting, string> = {
   PUSH_HARD: "PH", PUSH: "P", NEUTRAL: "N", CONSERVE: "C", CONSERVE_HARD: "CH",
 };
-const F1_FONT = "'Titillium Web', ui-monospace, monospace";
+const F1_FONT = "'Chakra Petch', ui-monospace, monospace";
+const DATA_FONT = "'Saira', ui-monospace, monospace";
 
 const EV = {
   RIVAL_PITTED: "rival_pitted",
@@ -99,11 +100,11 @@ function TyreChip({ compound, age }: { compound: string; age: number }) {
     <span className="inline-flex items-center gap-1">
       <span
         className="w-[18px] h-[18px] rounded-full inline-flex items-center justify-center text-[8px] font-semibold shrink-0"
-        style={{ backgroundColor: color, color: compound === "HARD" ? "#09090b" : "#fff" }}
+        style={{ backgroundColor: color, color: compound === "HARD" ? "#15151c" : "#fff" }}
       >
         {label}
       </span>
-      <span className="text-[10px] text-zinc-400 font-mono tabular-nums">{Math.round(age)}</span>
+      <span className="text-[10px] tabular-nums" style={{ color: "#9ca3af", fontFamily: DATA_FONT }}>{Math.round(age)}</span>
     </span>
   );
 }
@@ -126,23 +127,62 @@ function StatusStrip({
   onExit: () => void;
 }) {
   return (
-    <div
-      className="flex items-center justify-between px-5 py-2 gap-4 border-b border-zinc-800 bg-zinc-900 shrink-0"
-      style={{ fontFamily: F1_FONT }}
-    >
-      {/* Lap counter */}
-      <div className="flex items-center gap-4 shrink-0">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-[9px] uppercase tracking-[0.25em] text-zinc-600">LAP</span>
-          <span className="text-2xl font-semibold tracking-tight text-zinc-100 tabular-nums">
-            {lap}
+    <div className="shrink-0">
+      {/* Header bar */}
+      <div
+        className="flex items-center px-4 py-2 gap-5"
+        style={{ background: "#1d1d26", fontFamily: F1_FONT }}
+      >
+        {/* PITWALL logo lockup */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-[3px]">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                style={{
+                  width: 5,
+                  height: 20,
+                  background: "#E10600",
+                  transform: "skewX(-14deg)",
+                }}
+              />
+            ))}
+          </div>
+          <span
+            style={{
+              fontStyle: "italic",
+              fontWeight: 700,
+              fontSize: 18,
+              letterSpacing: "0.04em",
+            }}
+          >
+            <span style={{ color: "#fff" }}>PIT</span>
+            <span style={{ color: "#E10600" }}>WALL</span>
           </span>
-          <span className="text-zinc-500 text-sm">/ {totalLaps}</span>
         </div>
 
+        <div className="flex-1" />
+
+        {/* Lap counter */}
+        <div className="flex items-baseline gap-1.5 shrink-0">
+          <span
+            style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.25em", color: "#6b7280" }}
+          >
+            LAP
+          </span>
+          <span
+            className="tabular-nums"
+            style={{ fontSize: 22, fontWeight: 600, color: "#ECE7DA", letterSpacing: "-0.02em" }}
+          >
+            {lap}
+          </span>
+          <span style={{ color: "#52525b", fontSize: 13 }}>/ {totalLaps}</span>
+        </div>
+
+        {/* Safety car badge */}
         {scActive && (
           <div
-            className="flex items-center gap-1.5 px-3 py-0.5 animate-pulse"
+            className="flex items-center gap-1.5 px-3 py-0.5 animate-pulse shrink-0"
             style={{
               background: "#451a03",
               borderTop: "1px solid #92400e",
@@ -150,33 +190,66 @@ function StatusStrip({
               clipPath: "polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%)",
             }}
           >
-            <span className="text-amber-400 text-sm">⚠</span>
-            <span className="text-[10px] font-semibold tracking-[0.2em] text-amber-400 uppercase">
+            <span style={{ color: "#fbbf24", fontSize: 14 }}>⚠</span>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: "0.2em",
+                color: "#fbbf24",
+                textTransform: "uppercase",
+              }}
+            >
               Safety Car
             </span>
           </div>
         )}
+
+        {/* Fastest lap */}
+        {flDriver && (
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
+            <span style={{ color: "#a855f7", fontSize: 12 }}>●</span>
+            <span
+              style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.25em", color: "#6b7280" }}
+            >
+              FL
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#d8b4fe" }}>{flDriver}</span>
+            <span
+              className="tabular-nums"
+              style={{ fontSize: 10, color: "#a855f7", fontFamily: DATA_FONT }}
+            >
+              {flTime.toFixed(3)}
+            </span>
+          </div>
+        )}
+
+        <button
+          onClick={onExit}
+          style={{
+            fontSize: 9,
+            textTransform: "uppercase",
+            letterSpacing: "0.2em",
+            color: "#3f3f46",
+            fontFamily: F1_FONT,
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+          }}
+          className="hover:text-zinc-400 transition-colors shrink-0"
+        >
+          EXIT ✕
+        </button>
       </div>
 
-      {/* Fastest lap */}
-      {flDriver && (
-        <div className="hidden sm:flex items-center gap-2 shrink-0">
-          <span className="text-purple-500 text-sm">●</span>
-          <span className="text-[9px] uppercase tracking-widest text-zinc-600">FL</span>
-          <span className="text-[11px] font-semibold text-purple-300">{flDriver}</span>
-          <span className="text-[10px] text-purple-500 font-mono tabular-nums">
-            {flTime.toFixed(3)}
-          </span>
-        </div>
-      )}
-
-      <button
-        onClick={onExit}
-        className="text-[9px] uppercase tracking-[0.2em] text-zinc-700 hover:text-zinc-400 transition-colors shrink-0"
-        style={{ fontFamily: F1_FONT }}
-      >
-        EXIT ✕
-      </button>
+      {/* Kerb stripe */}
+      <div
+        style={{
+          height: 3,
+          background:
+            "repeating-linear-gradient(135deg, #E10600 0px, #E10600 8px, #ffffff 8px, #ffffff 16px)",
+        }}
+      />
     </div>
   );
 }
@@ -200,29 +273,27 @@ function TimingRow({
 }) {
   return (
     <div
-      className={[
-        "relative flex items-center gap-2 pl-[9px] pr-2 py-[5px] text-xs select-none",
-        isPlayer ? "bg-zinc-800/70" : isFastest ? "bg-purple-950/20" : "bg-zinc-950",
-      ].join(" ")}
-      style={{ fontFamily: F1_FONT }}
+      className="relative flex items-center gap-2 pl-[11px] pr-2 py-[5px] text-xs select-none"
+      style={{
+        fontFamily: F1_FONT,
+        background: isPlayer ? "#252530" : isFastest ? "rgba(88,28,135,0.12)" : "#15151c",
+      }}
     >
-      {/* Team colour stripe — wide and opaque so it reads clearly */}
+      {/* Team colour stripe — 5px for vivid readability */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-[4px]"
-        style={{ backgroundColor: colour }}
+        className="absolute left-0 top-0 bottom-0"
+        style={{ width: 5, backgroundColor: colour }}
       />
 
       {/* Position */}
-      <span className="w-4 text-right text-zinc-400 text-[10px] shrink-0 tabular-nums">
+      <span className="w-4 text-right text-[10px] shrink-0 tabular-nums" style={{ color: "#6b7280" }}>
         {car.position}
       </span>
 
-      {/* Driver code */}
+      {/* Driver code — cream in Chakra Petch */}
       <span
-        className={[
-          "w-[30px] font-semibold tracking-wider text-[11px] shrink-0 uppercase",
-          isPlayer ? "text-white" : isFastest ? "text-purple-300" : "text-zinc-300",
-        ].join(" ")}
+        className="w-[30px] font-semibold tracking-wider text-[11px] shrink-0 uppercase"
+        style={{ color: isPlayer ? "#ffffff" : isFastest ? "#c084fc" : "#ECE7DA" }}
       >
         {car.driver}
       </span>
@@ -235,9 +306,10 @@ function TimingRow({
       {/* PIT badge */}
       {car.pitted_this_lap && (
         <span
-          className="text-[8px] font-semibold tracking-wider text-emerald-400 shrink-0"
+          className="text-[8px] font-semibold tracking-wider shrink-0"
           style={{
             background: "#052e16",
+            color: "#4ade80",
             padding: "1px 4px",
             clipPath: "polygon(3px 0, 100% 0, calc(100% - 3px) 100%, 0 100%)",
           }}
@@ -248,15 +320,15 @@ function TimingRow({
 
       {/* FL dot */}
       {isFastest && (
-        <span className="text-purple-500 text-[9px] shrink-0">●</span>
+        <span className="shrink-0" style={{ color: "#a855f7", fontSize: 9 }}>●</span>
       )}
 
       {/* Interval */}
-      <span className="ml-auto font-mono text-[10px] shrink-0 tabular-nums">
+      <span className="ml-auto text-[10px] shrink-0 tabular-nums" style={{ fontFamily: DATA_FONT }}>
         {interval === null ? (
-          <span className="text-zinc-200 font-semibold tracking-wider">LEAD</span>
+          <span style={{ color: "#ECE7DA", fontWeight: 600, letterSpacing: "0.1em" }}>LEAD</span>
         ) : (
-          <span className={isPlayer ? "text-zinc-200" : "text-zinc-400"}>
+          <span style={{ color: isPlayer ? "#ECE7DA" : "#71717a" }}>
             +{interval.toFixed(1)}
           </span>
         )}
@@ -265,9 +337,9 @@ function TimingRow({
       {/* Position change arrow */}
       <span className="w-3 text-center text-[10px] shrink-0">
         {posChange > 0 ? (
-          <span className="text-emerald-400">▲</span>
+          <span style={{ color: "#4ade80" }}>▲</span>
         ) : posChange < 0 ? (
-          <span className="text-red-500">▼</span>
+          <span style={{ color: "#E10600" }}>▼</span>
         ) : null}
       </span>
     </div>
@@ -294,18 +366,27 @@ function TimingTower({
 
   return (
     <div
-      className="flex flex-col border-r border-zinc-800/60 bg-zinc-950 overflow-y-auto"
-      style={{ width: 252, minWidth: 252 }}
+      className="flex flex-col overflow-y-auto"
+      style={{ width: 252, minWidth: 252, background: "#15151c", borderRight: "1px solid #2a2a38" }}
     >
       {/* Header */}
       <div
-        className="px-4 py-1.5 bg-zinc-900 border-b border-zinc-800 shrink-0"
+        className="px-4 py-1.5 shrink-0"
         style={{
-          clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 100%, 0 100%)",
+          background: "#1d1d26",
+          borderBottom: "1px solid #2a2a38",
           fontFamily: F1_FONT,
         }}
       >
-        <span className="text-[9px] uppercase tracking-[0.25em] text-zinc-400 font-semibold">
+        <span
+          style={{
+            fontSize: 9,
+            textTransform: "uppercase",
+            letterSpacing: "0.25em",
+            color: "#6b7280",
+            fontWeight: 600,
+          }}
+        >
           Timing Tower
         </span>
       </div>
@@ -1295,8 +1376,8 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
 
   return (
     <section
-      className="flex flex-col bg-zinc-950 border border-zinc-800 rounded overflow-hidden"
-      style={{ minHeight: 600 }}
+      className="flex flex-col rounded overflow-hidden"
+      style={{ background: "#15151c", border: "1px solid #2a2a38", minHeight: 600 }}
     >
       {/* Status strip */}
       <StatusStrip
