@@ -61,6 +61,11 @@ function buildSvgPath(pts: number[][]): string {
   return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ") + " Z";
 }
 
+function buildOpenPath(pts: number[][]): string {
+  if (pts.length < 2) return "";
+  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]},${p[1]}`).join(" ");
+}
+
 function computeCumLengths(pts: number[][]): number[] {
   const out = [0];
   for (let i = 1; i < pts.length; i++) {
@@ -424,6 +429,9 @@ function TimingTower({
 
 // ─── TrackMap ─────────────────────────────────────────────────────────────────
 
+const SECTOR_COLORS = ["#E10600", "#00C4B4", "#EFC027"] as const;
+const SECTOR_LABELS = ["S1", "S2", "S3"] as const;
+
 function TrackMap({
   cars,
   trackPoints,
@@ -456,12 +464,41 @@ function TrackMap({
     };
   }, [trackPoints]);
 
+  // Split into 3 equal sector segments (overlapping by 1 point so they join cleanly)
+  const sectors = useMemo(() => {
+    const n = trackPoints.length;
+    if (n < 6) return [trackPoints, [] as number[][], [] as number[][]];
+    const s1 = Math.floor(n / 3);
+    const s2 = Math.floor((2 * n) / 3);
+    return [
+      trackPoints.slice(0, s1 + 1),
+      trackPoints.slice(s1, s2 + 1),
+      trackPoints.slice(s2),
+    ];
+  }, [trackPoints]);
+
   if (trackPoints.length < 3) {
     return (
-      <div className="flex items-center justify-center h-full bg-zinc-950">
+      <div
+        style={{
+          width: 300,
+          height: 220,
+          background: "#1d1d26",
+          border: "1px solid #2a2a38",
+          borderRadius: 4,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         <span
-          className="text-zinc-700 text-[10px] uppercase tracking-[0.25em]"
-          style={{ fontFamily: F1_FONT }}
+          style={{
+            fontSize: 9,
+            textTransform: "uppercase",
+            letterSpacing: "0.25em",
+            color: "#3f3f46",
+            fontFamily: F1_FONT,
+          }}
         >
           No Track Data
         </span>
@@ -490,76 +527,104 @@ function TrackMap({
   );
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-zinc-950 overflow-hidden">
-      <span
-        className="absolute top-2 left-3 text-[9px] uppercase tracking-[0.2em] text-zinc-700 z-10 pointer-events-none"
-        style={{ fontFamily: F1_FONT }}
+    <div
+      style={{
+        width: 300,
+        background: "#1d1d26",
+        border: "1px solid #2a2a38",
+        borderRadius: 4,
+        overflow: "hidden",
+        flexShrink: 0,
+      }}
+    >
+      {/* Card header with sector legend */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "4px 10px",
+          borderBottom: "1px solid #2a2a38",
+          fontFamily: F1_FONT,
+        }}
       >
-        Live Track
-      </span>
+        <span
+          style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.25em", color: "#6b7280" }}
+        >
+          Live Track
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          {SECTOR_LABELS.map((label, i) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              <div
+                style={{ width: 12, height: 3, background: SECTOR_COLORS[i], borderRadius: 1 }}
+              />
+              <span style={{ fontSize: 8, color: "#6b7280" }}>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
 
       <svg
         viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
         preserveAspectRatio="xMidYMid meet"
-        className="w-full h-full"
-        style={{ maxWidth: "100%", maxHeight: "100%" }}
+        style={{ width: "100%", display: "block", height: 200 }}
       >
-        {/* Track kerb/border */}
+        {/* Track border — dark halo so sector colours pop */}
         <path
           d={svgPath}
           fill="none"
-          stroke="#3f3f46"
-          strokeWidth={dotR * 3.2}
+          stroke="#2a2a38"
+          strokeWidth={dotR * 3.8}
           strokeLinejoin="round"
           strokeLinecap="round"
         />
-        {/* Track surface */}
-        <path
-          d={svgPath}
-          fill="none"
-          stroke="#18181b"
-          strokeWidth={dotR * 1.8}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-        {/* Start/finish line marker */}
+
+        {/* Sector-coloured lines */}
+        {sectors.map((pts, i) =>
+          pts.length > 1 ? (
+            <path
+              key={i}
+              d={buildOpenPath(pts)}
+              fill="none"
+              stroke={SECTOR_COLORS[i]}
+              strokeWidth={dotR * 1.8}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              opacity={0.85}
+            />
+          ) : null,
+        )}
+
+        {/* Start/finish marker */}
         {trackPoints.length > 0 && (
           <circle
             cx={trackPoints[0][0]}
             cy={trackPoints[0][1]}
             r={dotR * 1.1}
-            fill="none"
-            stroke="#52525b"
-            strokeWidth={dotR * 0.5}
+            fill="#ECE7DA"
+            opacity={0.5}
           />
         )}
 
-        {/* Car dots */}
+        {/* Car dots — player last so it renders on top */}
         {sorted.map((car) => {
           const frac = carFraction(car.gap_to_leader, leaderLT, scActive);
           const [x, y] = ptAtFrac(trackPoints, lens, frac);
           const colour = teamColours.get(car.driver) ?? "#ffffff";
           const isPlayer = car.driver === playerId;
-          const r = isPlayer ? dotR * 1.6 : dotR;
+          const r = isPlayer ? dotR * 1.8 : dotR;
 
           return (
             <g key={car.driver}>
-              {/* Player glow ring */}
               {isPlayer && (
-                <circle
-                  cx={x}
-                  cy={y}
-                  r={r * 2.4}
-                  fill={colour}
-                  opacity={0.18}
-                />
+                <circle cx={x} cy={y} r={r * 2.6} fill={colour} opacity={0.2} />
               )}
               <circle cx={x} cy={y} r={r} fill={colour} />
-              {/* Player label */}
               {isPlayer && (
                 <text
                   x={x}
-                  y={y - r * 2.4}
+                  y={y - r * 2.6}
                   textAnchor="middle"
                   fontSize={dotR * 1.6}
                   fill={colour}
@@ -1389,7 +1454,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
         onExit={onBack}
       />
 
-      {/* Main content: timing tower + track map */}
+      {/* Main content: timing tower + race area (track map sits as compact card) */}
       <div className="flex flex-1 overflow-hidden" style={{ minHeight: 380 }}>
         <TimingTower
           cars={currentState.cars}
@@ -1398,14 +1463,16 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           prevState={prevState}
           flDriver={fastestLap?.driver ?? null}
         />
-        <div className="flex-1 overflow-hidden">
-          <TrackMap
-            cars={currentState.cars}
-            trackPoints={trackPoints}
-            teamColours={teamColours}
-            playerId={playerId}
-            scActive={currentState.sc_active}
-          />
+        <div className="flex-1 relative overflow-hidden" style={{ background: "#15151c" }}>
+          <div style={{ position: "absolute", top: 12, right: 12, zIndex: 10 }}>
+            <TrackMap
+              cars={currentState.cars}
+              trackPoints={trackPoints}
+              teamColours={teamColours}
+              playerId={playerId}
+              scActive={currentState.sc_active}
+            />
+          </div>
         </div>
       </div>
 
