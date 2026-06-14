@@ -1550,6 +1550,107 @@ function TeamRadio({ msg, onDismiss }: { msg: RadioMsg; onDismiss: () => void })
   );
 }
 
+// ─── Narrative generator (pure — derives debrief text from race history) ─────
+
+const COMPOUND_FULL_NAME: Record<string, string> = {
+  SOFT: "soft", MEDIUM: "medium", HARD: "hard",
+};
+
+function generateNarrative(history: RaceStateSchema[], playerId: string): string {
+  if (history.length < 2) return "Race data unavailable.";
+
+  const startPos = history[0].cars.find((c) => c.driver === playerId)?.position ?? 0;
+  const finalPos = history[history.length - 1].cars.find((c) => c.driver === playerId)?.position ?? 0;
+  const placesGained = startPos - finalPos; // positive = gained
+
+  // Collect player pit stops
+  interface PitEntry { lap: number; compound: string }
+  const pitStops: PitEntry[] = [];
+  for (const state of history) {
+    const car = state.cars.find((c) => c.driver === playerId);
+    if (car?.pitted_this_lap) pitStops.push({ lap: state.lap, compound: car.compound });
+  }
+
+  // Collect safety-car and cliff events across all laps
+  const safetyCarLaps = new Set<number>();
+  const cliffLaps: number[] = [];
+  for (const state of history) {
+    for (const ev of state.events) {
+      if (ev.kind === EV.SAFETY_CAR_DEPLOYED) safetyCarLaps.add(ev.lap);
+      if (ev.kind === EV.TYRE_CLIFF_WARNING)  cliffLaps.push(ev.lap);
+    }
+  }
+
+  const scPits = pitStops.filter(
+    (p) => safetyCarLaps.has(p.lap) || safetyCarLaps.has(p.lap - 1),
+  );
+  const firstCliff = cliffLaps[0];
+  const pitAfterCliff = firstCliff != null ? pitStops.find((p) => p.lap > firstCliff) : null;
+  const lateAfterCliff = pitAfterCliff != null && pitAfterCliff.lap > firstCliff + 3;
+
+  const sentences: string[] = [];
+
+  // ── Sentence 1: result ──
+  if (finalPos === 1) {
+    sentences.push(`Race winner${startPos > 1 ? ` from P${startPos}` : ""} — a commanding drive to the flag.`);
+  } else if (placesGained >= 5) {
+    sentences.push(`Brilliant result: charged from P${startPos} to P${finalPos}, gaining ${placesGained} places.`);
+  } else if (placesGained > 0) {
+    sentences.push(`Gained ${placesGained} place${placesGained > 1 ? "s" : ""} — P${startPos} at the start, P${finalPos} at the flag.`);
+  } else if (placesGained < 0) {
+    sentences.push(`Dropped ${Math.abs(placesGained)} place${Math.abs(placesGained) > 1 ? "s" : ""} from P${startPos} to P${finalPos}.`);
+  } else {
+    sentences.push(`Held P${finalPos} from the grid to the chequered flag.`);
+  }
+
+  // ── Sentence 2: strategy highlight ──
+  if (scPits.length > 0) {
+    const p = scPits[0];
+    const cmp = COMPOUND_FULL_NAME[p.compound] ?? p.compound.toLowerCase();
+    sentences.push(
+      placesGained > 0
+        ? `The lap-${p.lap} safety-car gamble onto ${cmp}s was the masterstroke.`
+        : `Pitted under the safety car on lap ${p.lap}, but the ${cmp}s couldn't deliver the positions.`,
+    );
+  } else if (pitStops.length === 0) {
+    sentences.push(
+      placesGained >= 0
+        ? "No pit stops — track position proved unassailable."
+        : "No pit stops, but fresh rubber from the rivals made the one-stopper untenable.",
+    );
+  } else if (pitStops.length === 1) {
+    const p = pitStops[0];
+    const cmp = COMPOUND_FULL_NAME[p.compound] ?? p.compound.toLowerCase();
+    if (lateAfterCliff) {
+      sentences.push(
+        `Boxed on lap ${p.lap} onto ${cmp}s — ${p.lap - firstCliff} laps after the cliff warning on lap ${firstCliff}.`,
+      );
+    } else {
+      sentences.push(`Single stop on lap ${p.lap} onto ${cmp}s defined the strategy.`);
+    }
+  } else {
+    const stopText = pitStops.map((p) => `lap ${p.lap}`).join(" and ");
+    sentences.push(
+      `${pitStops.length} stops (${stopText}) kept the tyres fresh and the pace high.`,
+    );
+  }
+
+  // ── Sentence 3: context / consequence ──
+  if (lateAfterCliff && scPits.length === 0 && pitAfterCliff) {
+    sentences.push(
+      placesGained < 0
+        ? `The ${pitAfterCliff.lap - firstCliff}-lap delay after the cliff cost dearly — positions were surrendered before the box.`
+        : `Staying out ${pitAfterCliff.lap - firstCliff} laps after the cliff was a risk that ultimately paid off.`,
+    );
+  } else if (firstCliff != null && !lateAfterCliff && pitAfterCliff) {
+    sentences.push(`Responded promptly to the cliff warning at lap ${firstCliff} — the tyres held together.`);
+  } else if (safetyCarLaps.size > 0 && scPits.length === 0 && pitStops.length > 0) {
+    sentences.push("The safety car didn't disrupt the strategy — the stops were already committed.");
+  }
+
+  return sentences.join(" ");
+}
+
 // ─── Setup phase sub-components ───────────────────────────────────────────────
 
 interface DriverPickerProps {
@@ -1557,22 +1658,58 @@ interface DriverPickerProps {
   selectedDriver: string | null;
   difficulty: Difficulty;
   loading: boolean;
+  rivalTarget: string | null;
   onSelectDriver: (d: string) => void;
+  onRivalTarget: (d: string | null) => void;
   onDifficulty: (d: Difficulty) => void;
   onStart: () => void;
 }
+
+const HOW_TO_PLAY = [
+  "Choose your driver and AI difficulty, then hit START RACE.",
+  "▶ plays lap-by-lap; ⏩ jumps to the next event.",
+  "BOX NOW or STAY OUT — timing is everything.",
+  "PH / P / N / C / CH dial sets your pace — push hard for speed, conserve to save tyres.",
+  "Set an optional RIVAL TO BEAT and see if you can finish ahead of them.",
+];
 
 function DriverPicker({
   strategies,
   selectedDriver,
   difficulty,
   loading,
+  rivalTarget,
   onSelectDriver,
+  onRivalTarget,
   onDifficulty,
   onStart,
 }: DriverPickerProps) {
+  const [showHelp, setShowHelp] = useState(false);
+
   return (
     <div className="space-y-6">
+
+      {/* How to play */}
+      <div>
+        <button
+          onClick={() => setShowHelp((s) => !s)}
+          className="text-[10px] uppercase tracking-widest text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1.5"
+        >
+          <span>{showHelp ? "▲" : "▼"}</span> HOW TO PLAY
+        </button>
+        {showHelp && (
+          <ul className="mt-3 space-y-1.5 pl-1">
+            {HOW_TO_PLAY.map((line, i) => (
+              <li key={i} className="flex items-start gap-2 text-[11px] text-zinc-400">
+                <span className="text-zinc-600 shrink-0 mt-px">·</span>
+                {line}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Driver select */}
       <div>
         <h3 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-3">
           Select Driver
@@ -1595,6 +1732,47 @@ function DriverPicker({
         </div>
       </div>
 
+      {/* Rival to beat */}
+      <div>
+        <div className="flex items-center gap-3 mb-3">
+          <h3 className="text-[10px] uppercase tracking-widest text-zinc-500">
+            Rival to Beat <span className="text-zinc-700">(optional)</span>
+          </h3>
+          {rivalTarget && (
+            <button
+              onClick={() => onRivalTarget(null)}
+              className="text-[9px] uppercase tracking-widest text-zinc-600 hover:text-zinc-400 transition-colors"
+            >
+              ✕ clear
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-1.5">
+          {strategies.map((s) => {
+            const isSelected = rivalTarget === s.driver;
+            const isPlayer = selectedDriver === s.driver;
+            return (
+              <button
+                key={s.driver}
+                onClick={() => onRivalTarget(isSelected ? null : s.driver)}
+                disabled={isPlayer}
+                className={[
+                  "py-2 px-1 rounded text-xs font-semibold tracking-wider transition-all border",
+                  isPlayer
+                    ? "opacity-20 cursor-not-allowed bg-zinc-900 border-zinc-800 text-zinc-600"
+                    : isSelected
+                    ? "bg-amber-700 border-amber-500 text-white shadow-lg shadow-amber-900/30"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200",
+                ].join(" ")}
+              >
+                {s.driver}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* AI Difficulty */}
       <div>
         <h3 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-3">
           AI Difficulty
@@ -1633,74 +1811,178 @@ function DriverPicker({
   );
 }
 
-function FinishedScreen({
-  state,
+function VerdictScreen({
+  history,
   playerId,
+  teamColour,
+  fullName,
+  team,
+  rivalTarget,
+  teamColours,
   onNewRace,
 }: {
-  state: RaceStateSchema;
+  history: RaceStateSchema[];
   playerId: string;
+  teamColour: string;
+  fullName: string;
+  team: string;
+  rivalTarget: string | null;
+  teamColours: Map<string, string>;
   onNewRace: () => void;
 }) {
-  const sorted = [...state.cars].sort((a, b) => a.position - b.position);
-  const playerCar = state.cars.find((c) => c.driver === playerId);
+  const finalState = history[history.length - 1];
+  const startPos = history[0]?.cars.find((c) => c.driver === playerId)?.position ?? 0;
+  const finalPos  = finalState.cars.find((c) => c.driver === playerId)?.position ?? 0;
+  const placesGained = startPos - finalPos;
+  const narrative = useMemo(() => generateNarrative(history, playerId), [history, playerId]);
+
+  const sorted = [...finalState.cars].sort((a, b) => a.position - b.position);
+  const rivalFinalPos = rivalTarget
+    ? finalState.cars.find((c) => c.driver === rivalTarget)?.position ?? null
+    : null;
+  const beatRival = rivalFinalPos !== null && finalPos < rivalFinalPos;
+
+  const Δcolour = placesGained > 0 ? "#22c55e" : placesGained < 0 ? "#ef4444" : "#71717a";
+  const Δbg     = placesGained > 0 ? "#16a34a1a" : placesGained < 0 ? "#dc26261a" : "#27272a";
+  const Δborder = placesGained > 0 ? "#16a34a55" : placesGained < 0 ? "#dc262655" : "#3f3f46";
 
   return (
-    <div className="space-y-6">
-      <div className="text-center">
-        <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">
-          Race Complete
-        </p>
-        <p className="text-3xl font-semibold tracking-[0.2em] text-zinc-100">
-          P{playerCar?.position ?? "?"}
-        </p>
-        <p className="text-sm text-zinc-400 mt-1">
-          {playerCar?.gap_to_leader === 0
-            ? "RACE WINNER"
-            : `+${playerCar?.gap_to_leader.toFixed(1)}s to leader`}
-        </p>
-      </div>
+    <div style={{ fontFamily: F1_FONT, color: "#ECE7DA" }}>
+      {/* Team accent bar */}
+      <div style={{ height: 3, background: teamColour }} />
 
-      <div>
-        <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">
-          Final Classification
-        </p>
-        <div className="space-y-[2px]">
-          {sorted.map((car) => (
-            <div
-              key={car.driver}
-              className={[
-                "flex items-center gap-3 px-3 py-1.5 rounded text-xs",
-                car.driver === playerId
-                  ? "bg-red-950/30 border border-red-900/50"
-                  : "bg-zinc-900",
-              ].join(" ")}
-            >
-              <span className="w-5 text-zinc-600 text-[10px]">P{car.position}</span>
-              <span
-                className={[
-                  "font-semibold tracking-wider w-9",
-                  car.driver === playerId ? "text-red-400" : "text-zinc-300",
-                ].join(" ")}
-              >
-                {car.driver}
-              </span>
-              <span className="text-zinc-500 ml-auto font-mono text-[10px]">
-                {car.gap_to_leader === 0
-                  ? "WINNER"
-                  : `+${car.gap_to_leader.toFixed(1)}s`}
-              </span>
-            </div>
-          ))}
+      {/* Debrief header */}
+      <div style={{
+        background: "#0d0d14",
+        padding: "14px 20px",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        borderBottom: "1px solid #1a1a24",
+      }}>
+        <div>
+          <p style={{ fontSize: 9, letterSpacing: "0.3em", color: "#3f3f46", textTransform: "uppercase" }}>
+            RACE DEBRIEF
+          </p>
+          <p style={{ fontSize: 18, fontWeight: 700, letterSpacing: "0.04em", marginTop: 4 }}>
+            {fullName}
+          </p>
+          <p style={{ fontSize: 9, letterSpacing: "0.2em", color: teamColour, textTransform: "uppercase", marginTop: 2 }}>
+            {team}
+          </p>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <p style={{
+            fontSize: 56, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em",
+            color: finalPos === 1 ? "#f59e0b" : "#ECE7DA",
+          }}>
+            P{finalPos}
+          </p>
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 4, marginTop: 5,
+            background: Δbg, border: `1px solid ${Δborder}`,
+            borderRadius: 3, padding: "3px 9px",
+          }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: Δcolour, letterSpacing: "0.06em" }}>
+              {placesGained > 0 ? `▲ +${placesGained}` : placesGained < 0 ? `▼ ${placesGained}` : "─ 0"}
+            </span>
+          </div>
+          <p style={{ fontSize: 8, color: "#3f3f46", letterSpacing: "0.15em", marginTop: 4, textTransform: "uppercase" }}>
+            from P{startPos}
+          </p>
         </div>
       </div>
 
-      <button
-        onClick={onNewRace}
-        className="w-full px-6 py-2.5 rounded font-semibold text-sm tracking-[0.2em] uppercase bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-500 text-zinc-200 transition-all"
-      >
-        NEW RACE
-      </button>
+      {/* Rival result */}
+      {rivalTarget && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "8px 20px",
+          background: beatRival ? "#14532d18" : "#7c160018",
+          borderBottom: `1px solid ${beatRival ? "#16a34a44" : "#dc262644"}`,
+        }}>
+          <span style={{ fontSize: 8, letterSpacing: "0.25em", color: "#3f3f46", textTransform: "uppercase" }}>VS RIVAL</span>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: teamColours.get(rivalTarget) ?? "#ECE7DA" }}>
+            {rivalTarget}
+          </span>
+          <span style={{ fontSize: 10, color: "#52525b", fontFamily: DATA_FONT }}>P{rivalFinalPos ?? "?"}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, marginLeft: "auto", color: beatRival ? "#22c55e" : "#ef4444" }}>
+            {beatRival ? "BEATEN ✓" : "LOST ✗"}
+          </span>
+        </div>
+      )}
+
+      {/* Verdict narrative */}
+      <div style={{ padding: "14px 20px", background: "#11111a", borderBottom: "1px solid #1a1a24" }}>
+        <p style={{ fontSize: 8, letterSpacing: "0.3em", color: "#3f3f46", textTransform: "uppercase", marginBottom: 8 }}>
+          VERDICT
+        </p>
+        <p style={{ fontSize: 13, color: "#a0a0b8", fontFamily: DATA_FONT, lineHeight: 1.65, fontStyle: "italic" }}>
+          {narrative}
+        </p>
+      </div>
+
+      {/* Final classification */}
+      <div style={{ padding: "12px 20px 6px" }}>
+        <p style={{ fontSize: 8, letterSpacing: "0.3em", color: "#3f3f46", textTransform: "uppercase", marginBottom: 8 }}>
+          FINAL CLASSIFICATION
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {sorted.map((car) => {
+            const isPlayer = car.driver === playerId;
+            const isRival  = rivalTarget !== null && car.driver === rivalTarget;
+            const carColour = teamColours.get(car.driver) ?? "#52525b";
+            return (
+              <div
+                key={car.driver}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "5px 8px",
+                  background: isPlayer ? `${teamColour}14` : isRival ? "#a8701012" : "#0d0d14",
+                  border: `1px solid ${isPlayer ? teamColour + "40" : isRival ? "#a8701040" : "#191923"}`,
+                  borderLeft: `3px solid ${isPlayer ? teamColour : isRival ? "#a87010" : "#191923"}`,
+                }}
+              >
+                <span style={{ fontSize: 9, color: "#3f3f46", width: 18, textAlign: "right", fontFamily: DATA_FONT, flexShrink: 0 }}>
+                  {car.position}
+                </span>
+                <div style={{ width: 2, height: 12, background: carColour, borderRadius: 1, flexShrink: 0 }} />
+                <span style={{
+                  fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", width: 34,
+                  color: isPlayer ? teamColour : "#ECE7DA",
+                }}>
+                  {car.driver}
+                </span>
+                {isPlayer && (
+                  <span style={{ fontSize: 7, color: teamColour, letterSpacing: "0.2em", textTransform: "uppercase" }}>YOU</span>
+                )}
+                {isRival && !isPlayer && (
+                  <span style={{ fontSize: 7, color: "#a87010", letterSpacing: "0.2em", textTransform: "uppercase" }}>RIVAL</span>
+                )}
+                <span style={{ fontSize: 9, color: "#52525b", marginLeft: "auto", fontFamily: DATA_FONT }}>
+                  {car.gap_to_leader === 0 ? "WINNER" : `+${car.gap_to_leader.toFixed(1)}s`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* New race */}
+      <div style={{ padding: "14px 20px 20px" }}>
+        <button
+          onClick={onNewRace}
+          style={{
+            width: "100%", padding: "10px 0",
+            background: "#1a1a24", border: `1px solid ${teamColour}33`,
+            color: "#ECE7DA", fontFamily: F1_FONT,
+            fontSize: 11, fontWeight: 700, letterSpacing: "0.3em",
+            textTransform: "uppercase", cursor: "pointer",
+          }}
+        >
+          NEW RACE
+        </button>
+      </div>
     </div>
   );
 }
@@ -2028,6 +2310,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const [trackPoints, setTrackPoints] = useState<number[][]>([]);
   const [pitHudInfo, setPitHudInfo] = useState<PitHudInfo | null>(null);
   const [radioMsg, setRadioMsg] = useState<RadioMsg | null>(null);
+  const [rivalTarget, setRivalTarget] = useState<string | null>(null);
 
   const dismissRadio = useCallback(() => setRadioMsg(null), []);
 
@@ -2360,7 +2643,9 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
           selectedDriver={selectedDriver}
           difficulty={difficulty}
           loading={starting}
+          rivalTarget={rivalTarget}
           onSelectDriver={setSelectedDriver}
+          onRivalTarget={setRivalTarget}
           onDifficulty={setDifficulty}
           onStart={handleStart}
         />
@@ -2387,22 +2672,32 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
   const lastState = history[history.length - 1];
 
   if (phase === "finished" && lastState) {
+    const finishedPlayerId = selectedDriver ?? "";
+    const finishedMeta = driverMeta.get(finishedPlayerId);
     return (
-      <section className="bg-zinc-900 border border-zinc-700 rounded p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-xs uppercase tracking-widest text-zinc-400">
-            Race Engineer Mode
-          </h2>
+      <section
+        style={{ background: "#15151c", border: "1px solid #2a2a38", borderRadius: 6, overflow: "hidden" }}
+      >
+        {/* Minimal nav bar */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", borderBottom: "1px solid #1a1a24" }}>
+          <span style={{ fontSize: 9, letterSpacing: "0.3em", color: "#3f3f46", textTransform: "uppercase", fontFamily: F1_FONT }}>
+            RACE ENGINEER MODE · {baseline.race.gp_name}
+          </span>
           <button
             onClick={onBack}
-            className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            style={{ fontSize: 9, letterSpacing: "0.15em", color: "#3f3f46", background: "none", border: "none", cursor: "pointer", fontFamily: F1_FONT }}
           >
-            ← Back
+            ← EXIT
           </button>
         </div>
-        <FinishedScreen
-          state={lastState}
-          playerId={selectedDriver ?? ""}
+        <VerdictScreen
+          history={history}
+          playerId={finishedPlayerId}
+          teamColour={teamColours.get(finishedPlayerId) ?? "#ef4444"}
+          fullName={finishedMeta?.fullName ?? finishedPlayerId}
+          team={finishedMeta?.team ?? ""}
+          rivalTarget={rivalTarget}
+          teamColours={teamColours}
           onNewRace={() => {
             setPhase("setup");
             setHistory([]);
@@ -2411,6 +2706,7 @@ export function RaceEngineerScreen({ baseline, onBack }: Props) {
             setPendingPit(null);
             setRaceError(null);
             setPitHudInfo(null);
+            setRivalTarget(null);
           }}
         />
       </section>

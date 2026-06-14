@@ -1,11 +1,15 @@
 # PitWall — F1 Race Strategy Simulator
 
-> Pick a Grand Prix. Edit a pit-stop strategy. Watch the field reorder.
+> Pick a Grand Prix. Edit a pit-stop strategy — or race it yourself in real time.
 
-<!-- Replace with a real screen-recording once the app is deployed -->
+<!-- Drop a screen-recording here once deployed (e.g. Loom → GIF via gifski) -->
 ![Demo placeholder](docs/demo.gif)
 
-PitWall lets you replay any Formula 1 race and ask *what if?* Move a pit stop five laps earlier, swap to a different compound, and the engine re-simulates the entire field in under a second. A live delta table shows exactly who gained a position and by how many seconds.
+PitWall has two modes:
+
+**Strategy editor** — pick a real Grand Prix, drag pit-stop markers on the stint timeline, and the engine re-simulates the entire field in under a second. A live delta table shows exactly who gained a position and by how many seconds.
+
+**Race Engineer Mode (live)** — take the wheel as your chosen driver's race engineer. Step through the race lap-by-lap, set your pace, decide when to pit, and react to safety cars and tyre-cliff warnings. The same five-component model runs under the hood; your decisions feed into it in real time. A post-race debrief screen generates a narrative verdict from your actual strategy choices.
 
 ---
 
@@ -59,13 +63,14 @@ pitwall/
 │   ├── engine/sim/  lap model (five components, runner, config, strategy types)
 │   ├── engine/db.py SQLite helpers
 │   ├── engine/ingest.py  FastF1 → SQLite (runs once)
-│   └── api/         FastAPI HTTP wrapper, Pydantic schemas, three endpoints
+│   └── api/         FastAPI HTTP wrapper, Pydantic schemas
 └── web/             React + TypeScript + Vite front-end
     └── src/api/     typed fetch client — mirrors Pydantic schemas 1:1, no simulation logic
 ```
 
 ### Data flow
 
+**Strategy editor:**
 ```
 FastF1 (network, once)
     │  engine/ingest.py
@@ -79,16 +84,28 @@ FastAPI  ·  GET /races  ·  GET /races/{id}/baseline  ·  POST /compare
 React UI — StintTimeline, GapChart, ComparePanel
 ```
 
-The API is a thin shell. It validates input with Pydantic, reads race metadata from SQLite, calls `simulate()`, and serialises the output. It contains zero lap-time logic. This means the model can be tested by calling `simulate(strategies, laps)` directly — no HTTP, no database, no fixtures.
+**Race Engineer Mode:**
+```
+Same SQLite cache
+    │
+    ▼
+FastAPI  ·  POST /race/start  ·  POST /race/{id}/step  ·  POST /race/{id}/advance
+    │  lap-by-lap interactive session, pace + pit decisions fed in each request
+    ▼
+React UI — RaceEngineerScreen (timing tower, track map, pit HUD, team radio)
+    │
+    ▼
+VerdictScreen — narrative debrief generated from recorded events + decisions
+```
+
+The API is a thin shell. It validates input with Pydantic, reads race metadata from SQLite, calls `simulate()`, and serialises the output. It contains zero lap-time logic.
 
 ### Why this split matters
 
-The single-responsibility boundary is what makes the project interesting as a portfolio piece:
-
 - The **engine** is independently testable with pure unit tests. No mocks needed; the functions have no side effects.
 - The **API** can be swapped (FastAPI → Django, REST → GraphQL) without touching the model.
-- The **front-end** can be rebuilt (React → Svelte, chart library swap) without touching the API or model.
-- A future mobile app or CLI could call `simulate()` directly or hit the same HTTP endpoints.
+- The **front-end** can be rebuilt without touching the API or model.
+- The narrative debrief is generated from race data, not hard-coded — it reads the same `SessionEventSchema` events the radio system uses.
 
 ---
 
@@ -100,6 +117,9 @@ The single-responsibility boundary is what makes the project interesting as a po
 | `GET` | `/races/{id}/baseline` | Reconstruct baseline strategies from real pit data + simulate |
 | `POST` | `/simulate` | Run a fully custom strategy set |
 | `POST` | `/compare` | Run strategy A vs B; return both results + per-driver position/time delta |
+| `POST` | `/race/start` | Start an interactive race session; returns session ID + grid state |
+| `POST` | `/race/{id}/step` | Advance exactly one lap with pace + pit decision |
+| `POST` | `/race/{id}/advance` | Advance to the next event (rival pit, safety car, tyre cliff) |
 
 Full OpenAPI docs at `http://localhost:8000/docs` when the server is running.
 
@@ -133,11 +153,12 @@ These are explicit non-goals for v1. The model produces correct *relative* order
 | Decision | What was rejected | Reason |
 |---|---|---|
 | Linear tyre degradation | Quadratic or cliff model | Simpler to calibrate per compound; accuracy is sufficient for strategic insight |
-| SQLite for race cache | PostgreSQL, Redis | Zero infrastructure, single file, trivially portable — right for a portfolio project |
-| Full 20-car field always simulated | Simulate only the two cars being compared | Position deltas are only meaningful when the whole field moves — an undercut from P3 to P2 requires P2's car to also be running |
+| SQLite for race cache | PostgreSQL, Redis | Zero infrastructure, single file, trivially portable |
+| Full 20-car field always simulated | Simulate only the two cars being compared | Position deltas are only meaningful when the whole field moves |
 | No safety-car model | Probabilistic VSC | SC timing is race-specific and effectively random; adding a fixed SC would give false precision |
-| Recharts for charting | D3, Observable Plot | Typed, React-native, zero config — right tool for a 20-line × 70-lap dataset |
+| Recharts for charting | D3, Observable Plot | Typed, React-native, zero config |
 | Drag-and-drop pit editor | Form-only interface | The lap axis makes pit strategy tangible; dragging a marker and watching the stint bars redraw is the core UX |
+| Narrative debrief from events | LLM-generated copy | The event log already contains every decision; deterministic generation is faster, cheaper, and always accurate |
 
 ---
 
@@ -153,15 +174,13 @@ pip install -e ".[dev]"
 python -m engine.ingest --year 2024 --gp "Hungary"
 ```
 
-FastF1 caches the downloaded session to disk; subsequent runs are instant.
-
 ### 2 · Start the API
 
 ```bash
 # From engine/, with venv active
 uvicorn api.main:app --reload
 # → http://localhost:8000
-# → http://localhost:8000/docs   (Swagger UI)
+# → http://localhost:8000/docs
 ```
 
 ### 3 · Start the front-end
@@ -177,10 +196,33 @@ npm run dev
 
 ```bash
 cd engine
-pytest                          # full suite
-pytest -k undercut              # undercut emergence test only
-pytest --cov=engine             # with line coverage
+pytest                  # full suite
+pytest -k undercut      # undercut emergence test only
+pytest --cov=engine     # with line coverage
 ```
+
+---
+
+## Deployment
+
+**Front-end → Vercel**
+
+```bash
+cd web
+vercel deploy --prod
+# Set environment variable in Vercel dashboard:
+#   VITE_API_URL = https://<your-render-service>.onrender.com
+```
+
+**API → Render**
+
+Deploy `engine/` as a Python web service. Set:
+```
+CORS_ORIGINS=https://<your-vercel-app>.vercel.app
+PITWALL_DB=/path/to/pitwall.db
+```
+
+The SQLite file must be present on the Render instance (upload it or build it during the deploy step with `python -m engine.ingest --year 2024 --gp Hungary`).
 
 ---
 
@@ -198,7 +240,7 @@ engine/
     ingest.py         FastF1 → SQLite pipeline
     calibration.py    build_baseline_strategies(), TUNED_CFG
   api/
-    main.py           FastAPI app, CORS, three route handlers
+    main.py           FastAPI app, CORS, route handlers
     models.py         Pydantic request/response schemas
   tests/
     test_components.py
@@ -210,13 +252,15 @@ web/
   src/
     api/
       types.ts        TypeScript interfaces mirroring Pydantic schemas exactly
-      client.ts       typed fetch wrappers: fetchRaces, fetchBaseline, compare
+      client.ts       typed fetch wrappers
     components/
-      StintTimeline.tsx    horizontal stint bars + drag-and-drop pit editor
-      GapChart.tsx         Recharts gap-to-leader line chart
-      ComparePanel.tsx     delta table + side-by-side gap charts
-      StrategyEditor.tsx   lap-number input + compound dropdown per stop
-      RacePicker.tsx       race selection dropdown
-      Explainer.tsx        how-it-works panel shown before a race is loaded
+      RaceEngineerScreen.tsx  live race mode — timing tower, track map, pit HUD,
+                              team radio, VerdictScreen with narrative debrief
+      StintTimeline.tsx       horizontal stint bars + drag-and-drop pit editor
+      GapChart.tsx            Recharts gap-to-leader line chart
+      ComparePanel.tsx        delta table + side-by-side gap charts
+      StrategyEditor.tsx      lap-number input + compound dropdown per stop
+      RacePicker.tsx          race selection dropdown
+      Explainer.tsx           how-it-works panel shown before a race is loaded
     App.tsx           state orchestration, compare flow, layout
 ```
